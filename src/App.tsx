@@ -540,10 +540,6 @@ function App() {
 
   const handleComponentBuild = useCallback(async (component: TeamCityComponent) => {
     if (!component.canTrigger) return
-    if (integrations.currentRelease?.isOverride) {
-      showNotice('Custom versions are check-only. Use the configured release before triggering a build.', 'error')
-      return
-    }
     const actionKey = `build:${component.key}`
     if (actionInFlight.current.has(actionKey)) return
     const branch = teamCityReleaseBranch || 'CURRENT_RELEASE'
@@ -554,14 +550,19 @@ function App() {
     const dependencyWarning = component.key === 'console'
       ? `\n\nTeamCity will also run the required Console dependency builds.`
       : ''
-    if (!window.confirm(`Trigger the ${component.label} build for ${branch}?\n\n${pendingLabel}${sourceLabel}.${dependencyWarning}`)) return
+    const customVersionWarning = integrations.currentRelease?.isOverride
+      ? `\n\nCUSTOM VERSION: ${branch}\nConfigured release: ${integrations.currentRelease.defaultValue || 'not configured'}\n\nConfirm that you intend to queue this exact custom release.`
+      : ''
+    if (!window.confirm(`Trigger the ${component.label} build for ${branch}?\n\n${pendingLabel}${sourceLabel}.${dependencyWarning}${customVersionWarning}`)) return
 
     actionInFlight.current.add(actionKey)
     setPendingActions((current) => [...current, actionKey])
     try {
       const result = await apiRequest<{ status: string; reason?: string; buildId?: number | string }>(
         `/api/teamcity/components/${encodeURIComponent(component.key)}/trigger`,
-        { method: 'POST', headers: { 'X-Pulseboard-Request': '1' } },
+        integrations.currentRelease?.isOverride
+          ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Pulseboard-Request': '1' }, body: JSON.stringify({ release: branch }) }
+          : { method: 'POST', headers: { 'X-Pulseboard-Request': '1' } },
       )
       if (result.status === 'queued' && result.buildId) {
         showNotice(`${component.label} build queued for ${branch}...`, 'info', 0)
@@ -576,7 +577,7 @@ function App() {
       showNotice(error instanceof Error ? error.message : `Unable to queue the ${component.label} build`, 'error')
       void refreshIntegrations()
     }
-  }, [clearPendingAction, integrations.currentRelease?.isOverride, pollComponentBuild, refreshIntegrations, showNotice, teamCityReleaseBranch])
+  }, [clearPendingAction, integrations.currentRelease, pollComponentBuild, refreshIntegrations, showNotice, teamCityReleaseBranch])
 
   const handleReleaseCheck = async (event: FormEvent) => {
     event.preventDefault()
@@ -787,7 +788,7 @@ function App() {
           </section>
 
           <section className="integrations delivery-integrations">
-            <div className="section-header compact"><div><h2>Build &amp; pipeline activity</h2><p>Activity for {integrations.currentRelease?.value || 'the configured release'}.</p></div>{integrations.currentRelease?.isOverride && <span className="check-only-badge">Custom check · triggers disabled</span>}</div>
+            <div className="section-header compact"><div><h2>Build &amp; pipeline activity</h2><p>Activity for {integrations.currentRelease?.value || 'the configured release'}.</p></div>{integrations.currentRelease?.isOverride && <span className="check-only-badge">Custom version · confirmation required</span>}</div>
             <div className="integration-grid">
               <div className="integration-card">
                 <div className="integration-heading"><span className="integration-logo gitlab">▰</span><div><h3>GitLab pipelines</h3><p>{integrations.gitlab?.ref || integrations.currentRelease?.value || 'Selected release pipeline'}</p></div><span className={`connection-dot ${integrations.gitlab?.status === 'unknown' ? 'disconnected' : ''}`} /></div>
@@ -809,7 +810,7 @@ function App() {
                           <small>{component.reason || (component.activeBuild ? `Build ${component.activeBuild.number || component.activeBuild.id || ''} ${component.activeBuild.state || 'active'}` : component.pendingChanges ? `${pendingCount} pending ${component.pendingChanges === 1 ? 'change' : 'changes'}` : `No pending changes · ${component.checkedConfigurations} ${component.checkedConfigurations === 1 ? 'configuration' : 'configurations'} checked`)}</small>
                         </div>
                         {component.activeBuild?.webUrl && <a className="teamcity-active-link" href={component.activeBuild.webUrl} target="_blank" rel="noopener noreferrer">{component.activeBuild.state || 'active'}</a>}
-                        {!integrations.currentRelease?.isOverride && (component.canTrigger || isPending) && <button type="button" className="teamcity-trigger-button" disabled={isPending} onClick={() => void handleComponentBuild(component)}>{isPending ? 'Queuing...' : 'Trigger build'}</button>}
+                        {(component.canTrigger || isPending) && <button type="button" className="teamcity-trigger-button" disabled={isPending} onClick={() => void handleComponentBuild(component)}>{isPending ? 'Queuing...' : 'Trigger build'}</button>}
                       </div>
                       {component.pendingSources.length > 0 && <div className="teamcity-pending-sources">{component.pendingSources.map((source) => `${source.name} (${source.pendingChanges})`).join(' · ')}</div>}
                     </div>

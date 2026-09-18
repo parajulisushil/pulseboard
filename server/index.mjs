@@ -980,6 +980,24 @@ function normalizeReleaseCheck(value) {
   return normalizeTeamCityBranch(value)
 }
 
+async function readComponentBuildRelease(request) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    size += chunk.length
+    if (size > 4096) throw new Error('Request body is too large')
+    chunks.push(chunk)
+  }
+  if (!size) return undefined
+  if (!String(request.headers['content-type'] || '').toLowerCase().startsWith('application/json')) throw new Error('Content-Type must be application/json')
+  let input
+  try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new Error('Request body must contain valid JSON') }
+  if (!input || Array.isArray(input) || typeof input !== 'object') throw new Error('Request body must be a JSON object')
+  const release = normalizeReleaseCheck(input.release)
+  if (!release) throw new Error('Version must use the form 11.8.5.0 or v11.8.5.0')
+  return release
+}
+
 async function getDeployedVersion(server) {
   if (!server.services) return undefined
   try {
@@ -1369,8 +1387,12 @@ const api = createServer(async (request, response) => {
       const componentKey = decodePathPart(parts[3])?.toLowerCase()
       const configuration = teamCityComponentBuildTypes().find((component) => component.key === componentKey)
       if (!configuration) return send(response, 404, { error: 'TeamCity component was not found' })
+      let requestedRelease
+      try { requestedRelease = await readComponentBuildRelease(request) } catch (error) {
+        return send(response, error.message === 'Request body is too large' ? 413 : 400, { error: error.message })
+      }
       if (!integrationConfigured('TEAMCITY')) return send(response, 503, { error: 'TeamCity is not configured' })
-      const branch = currentTeamCityBranch()
+      const branch = requestedRelease || currentTeamCityBranch()
       if (!branch) return send(response, 409, { error: 'CURRENT_RELEASE is not configured' })
 
       const actionKey = `${configuration.key}:${branch}`.toLowerCase()

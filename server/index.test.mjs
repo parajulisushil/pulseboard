@@ -342,6 +342,13 @@ test('serves health checks and protects API routes', async (context) => {
   })
   assert.equal(unverifiedComponentBuild.status, 403)
 
+  const invalidCustomComponentBuild = await fetch(`${baseUrl}/api/teamcity/components/api/trigger`, {
+    method: 'POST',
+    headers: { Authorization: authorization, 'Content-Type': 'application/json', 'X-Pulseboard-Request': '1' },
+    body: JSON.stringify({ release: 'release/11.8.5' }),
+  })
+  assert.equal(invalidCustomComponentBuild.status, 400)
+
   const unknownComponentBuild = await fetch(`${baseUrl}/api/teamcity/components/database/trigger`, {
     method: 'POST',
     headers: { Authorization: authorization, 'X-Pulseboard-Request': '1' },
