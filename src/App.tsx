@@ -54,6 +54,7 @@ type Server = {
   ip: string
   remoteHost?: string
   checkPort?: number
+  teamCityAgent?: boolean
   group: 'Test machines' | 'Infrastructure'
   environment: string
   location: string
