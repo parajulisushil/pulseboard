@@ -1,0 +1,56 @@
+name: Deploy Pulseboard
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy"
+        required: true
+        default: "latest"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate image tag
+        shell: bash
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          if [[ ! "$IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Invalid Docker image tag: $IMAGE_TAG"
+            exit 1
+          fi
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:github-actions
+          ping: ${{ vars.DEPLOY_HOST }}
+
+      - name: Deploy to private server
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          echo "Deploying image tag: $IMAGE_TAG"
+
+          tailscale ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd /opt/pulseboard && \
+             IMAGE_TAG='${IMAGE_TAG}' docker compose pull && \
+             IMAGE_TAG='${IMAGE_TAG}' docker compose up -d --remove-orphans && \
+             docker compose ps"
+
+      - name: Deployment complete
+        run: |
+          echo "Pulseboard deployment completed."
+          echo "Image tag: ${{ inputs.image_tag }}"
