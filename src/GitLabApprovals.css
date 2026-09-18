@@ -1,0 +1,36 @@
+.gitlab-approvals{scroll-margin-top:24px;margin-bottom:43px}
+.approval-count{display:inline-block;vertical-align:middle;margin-left:6px;border-radius:10px;background:#3b2d21;color:var(--amber);padding:2px 7px;font-size:11px;letter-spacing:0}
+.approval-panel{border:1px solid var(--line);border-radius:6px;background:var(--panel);overflow:hidden}
+.approval-account{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;padding:14px 18px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.approval-account strong{font-weight:600;color:var(--ink)}
+.approval-list{list-style:none;padding:0;margin:0}
+.approval-row{display:flex;align-items:center;gap:20px;padding:18px}
+.approval-row+.approval-row{border-top:1px solid var(--line)}
+.approval-copy{flex:1;min-width:0;overflow-wrap:anywhere}
+.approval-title{color:var(--ink);font-size:13px;font-weight:600;line-height:1.6;text-decoration:none}
+.approval-title span{color:var(--blue);margin-right:5px}
+.approval-title:hover{color:var(--blue);text-decoration:underline}
+.approval-meta{color:var(--muted);font-size:11px;line-height:1.6;margin:6px 0}
+.approval-meta code{font-size:10px}
+.approval-rules,.approval-reason{color:var(--amber);font-size:11px;line-height:1.6;margin:5px 0 0}
+.ai-review{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:4px;color:var(--muted);font-size:11px;line-height:1.55}
+.ai-review>strong{color:var(--ink)}
+.ai-review>p{margin:4px 0 0}
+.ai-review.has-critical{border-color:#75483f;background:#2d211f;color:#e5a190}
+.ai-review ul{list-style:none;margin:8px 0 0;padding:0}
+.ai-review li+li{margin-top:10px;padding-top:10px;border-top:1px solid #573a35}
+.ai-review li>strong{display:block;color:#f0b2a4}
+.ai-review li>span{display:block;margin-top:2px;color:var(--faint);font:9px 'DM Mono';overflow-wrap:anywhere}
+.ai-review li>p{margin:3px 0 0}
+.approve-button{flex-shrink:0;border:1px solid #526f61;border-radius:4px;background:#20342b;color:#9fe0bc;padding:8px 13px;font-size:11px;cursor:pointer}
+.approve-button:hover:not(:disabled){background:#294438;border-color:#6a9b82}
+.approve-button:disabled{cursor:not-allowed;opacity:.55}
+.approve-button:focus-visible,.approval-title:focus-visible,.approval-warning summary:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.approval-empty{padding:24px 18px;margin:0;color:var(--muted);font-size:12px}
+.approval-empty.positive{color:var(--green)}
+.approval-error{color:#e5a190;font-size:11px;line-height:1.6;margin:8px 0 0}
+.approval-panel>.approval-error{margin:0;padding:16px 18px}
+.approval-warning{padding:16px 18px;color:var(--amber);font-size:11px;line-height:1.6;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.approval-warning summary{cursor:pointer;margin-top:5px}
+.approval-warning ul{padding-left:18px;margin-bottom:0}
+@media(max-width:650px){.approval-row{align-items:flex-start;flex-direction:column;gap:12px;padding:15px}.approval-account{padding:14px 15px}.approval-row .approve-button{align-self:flex-end}}

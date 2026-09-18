@@ -1,0 +1,39 @@
+{
+  "name": "pulseboard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Production operations dashboard for infrastructure and delivery monitoring",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "api": "node server/index.mjs",
+    "start": "node server/index.mjs",
+    "setup:browser": "playwright install --only-shell chromium",
+    "check:sql": "node server/check-sql-error.mjs",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "test": "node --test server/*.test.mjs",
+    "check": "npm run lint && npm run test && npm run build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "ldapts": "^9.0.0",
+    "mssql": "12.7.0",
+    "playwright": "1.63.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "oxlint": "^1.79.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2"
+  }
+}

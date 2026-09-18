@@ -1,0 +1,20 @@
+.deployment-controls{padding:12px 0;border-top:1px solid var(--line);font-size:11px}
+.deployment-control-buttons{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}
+.deployment-control-button{border:1px solid #526f61;border-radius:4px;background:#20342b;color:#9fe0bc;padding:7px 10px;font-size:11px;cursor:pointer}
+.deployment-control-button:hover:not(:disabled){background:#294438;border-color:#6a9b82}
+.deployment-controls button:disabled{opacity:.55;cursor:not-allowed}
+.deployment-controls button:focus-visible,.deployment-controls input:focus-visible,.deployment-controls select:focus-visible,.deployment-controls a:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.deployment-schedule-form{padding:14px;margin-top:12px;border:1px solid #455052;border-radius:5px;background:#151b1d}
+.deployment-schedule-form label{display:block;color:var(--ink);font-size:11px;margin-bottom:12px}
+.deployment-schedule-form input,.deployment-schedule-form select{display:block;box-sizing:border-box;width:100%;min-width:0;margin-top:6px;padding:8px;border:1px solid #455052;border-radius:4px;background:#111719;color:var(--ink);font:12px Manrope,'Segoe UI',sans-serif}
+.deployment-schedule-form p,.deployment-schedule-status p{font-size:11px;color:#a3acaa;line-height:1.6;margin:7px 0}
+.deployment-schedule-status{border-left:2px solid var(--amber);padding:10px 12px;margin-top:12px;background:#1d2526;overflow-wrap:anywhere}
+.deployment-schedule-status strong{color:var(--amber);font-size:11px}
+.deployment-schedule-status.success{border-color:var(--green)}
+.deployment-schedule-status.success strong{color:var(--green)}
+.deployment-schedule-status.failed,.deployment-schedule-status.unconfirmed{border-color:#e5a190}
+.deployment-schedule-status.failed strong,.deployment-schedule-status.unconfirmed strong,.deployment-schedule-error{color:#e5a190}
+.deployment-schedule-error{font-size:11px;line-height:1.6;overflow-wrap:anywhere}
+.deployment-controls a{color:var(--blue);font-size:11px}
+.deployment-inline-button{border:0;background:transparent;color:var(--blue);text-decoration:underline;cursor:pointer;font-size:11px;padding:5px 0;display:block}
+.deployment-build-preview{color:var(--green)!important}

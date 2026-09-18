@@ -1,0 +1,72 @@
+[
+  {
+    "name": "Dev-QC01",
+    "loginUrl": "https://dev-qc01.veniosystems.com/VenioWeb/OnDemand/AppPlus/#/login",
+    "ip": "172.31.38.222",
+    "group": "Test machines",
+    "environment": "QA",
+    "location": "East US",
+    "deploymentBuildTypeId": "VenioUS_DeployInQC01_NewDeploy",
+    "services": [
+      { "name": "VenioDistributedService" },
+      { "name": "VenioSearchService" },
+      { "name": "VenioWebExportService" }
+    ]
+  },
+  {
+    "name": "Dev-QC02",
+    "loginUrl": "https://dev-qc02.veniosystems.com/VenioWeb/OnDemand/AppPlus/#/login",
+    "ip": "172.31.32.130",
+    "group": "Test machines",
+    "environment": "QA",
+    "location": "East US",
+    "deploymentBuildTypeId": "VenioUS_DeployInCS3_Deploy",
+    "services": [
+      { "name": "VenioDistributedService" },
+      { "name": "VenioSearchService" },
+      { "name": "VenioWebExportService" }
+    ]
+  },
+  {
+    "name": "Dev-QC03",
+    "loginUrl": "https://dev-qc03.veniosystems.com/VenioWeb/OnDemand/AppPlus/#/login",
+    "ip": "172.31.33.96",
+    "group": "Test machines",
+    "environment": "QA",
+    "location": "East US",
+    "deploymentBuildTypeId": "VenioUS_DeployInQc03_Deploy",
+    "services": [
+      { "name": "VenioDistributedService" },
+      { "name": "VenioSearchService" },
+      { "name": "VenioWebExportService" }
+    ]
+  },
+  {
+    "name": "Dev-QC04",
+    "loginUrl": "https://dev-qc04.veniosystems.com/VenioWeb/OnDemand/AppPlus/#/login",
+    "ip": "172.31.46.255",
+    "group": "Test machines",
+    "environment": "QA",
+    "location": "East US",
+    "services": [
+      { "name": "VenioDistributedService" },
+      { "name": "VenioSearchService" },
+      { "name": "VenioWebExportService" }
+    ]
+  },
+  {
+    "name": "Gitlab Runner",
+    "ip": "172.31.46.248",
+    "group": "Infrastructure",
+    "environment": "CI",
+    "location": "East US"
+  },
+  {
+    "name": "TeamCity Agent",
+    "ip": "172.31.76.142",
+    "teamCityAgent": true,
+    "group": "Infrastructure",
+    "environment": "CI",
+    "location": "East US"
+  }
+]

@@ -1,0 +1,15 @@
+node_modules
+dist
+.git
+.env.*
+!.env.example
+.agents
+.codex
+.idea
+.vscode
+coverage
+data
+.env
+*.log
+*.code-workspace
+legacy-infrastructure-status

@@ -1,0 +1,26 @@
+services:
+  pulseboard:
+    image: gpsushil/pulseboard:latest
+    ports:
+      - "${PULSEBOARD_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-3001}:${API_PORT:-3001}"
+    env_file:
+      - path: .env
+        format: raw
+    init: true
+    read_only: true
+    volumes:
+      - pulseboard_data:/app/data
+      - ./scripts:/app/scripts:ro
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 20s
+
+volumes:
+  pulseboard_data:
