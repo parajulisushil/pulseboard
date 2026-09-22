@@ -10,7 +10,7 @@ import { adPasswords, AdPasswordError, readAdResetRequest } from './ad-passwords
 import { createDeploymentScheduler, DeploymentScheduleError, readScheduleRequest } from './deployment-schedules.mjs'
 import { createScheduledJobManager, readScheduledJobRequest, ScheduledJobError } from './scheduled-jobs.mjs'
 import { readRecentSqlError, sqlErrorChecksEnabled } from './sql-errors.mjs'
-import { createInfrastructureMonitor, readInfrastructureInventory } from './infrastructure-status.mjs'
+import { createInfrastructureMonitor, pingHost, readInfrastructureInventory } from './infrastructure-status.mjs'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.join(root, '..')
@@ -1052,9 +1052,8 @@ async function getDeployedBuilds(server) {
   }
 }
 
-async function isReachable(ip, port = 443) {
-  const result = await runPowerShell(`Test-NetConnection -ComputerName $env:PULSEBOARD_ARG_0 -Port $env:PULSEBOARD_ARG_1 -InformationLevel Quiet -WarningAction SilentlyContinue`, [ip, port], { logErrors: false })
-  return result.ok && result.output.toLowerCase() === 'true'
+async function isReachable(ip, { checkHost = pingHost } = {}) {
+  return (await checkHost(ip)).online
 }
 
 async function remoteService(ip, serviceKey, action = 'status') {
@@ -1120,7 +1119,7 @@ async function getServerStatus(server, teamCityStatusSource, latestComponentsByB
     return { ...server, status: agentStatus.status, agentStatus }
   }
 
-  const reachable = reachableOverride ?? await isReachable(server.ip, server.checkPort || 443)
+  const reachable = reachableOverride ?? await isReachable(server.ip)
   if (!reachable) return offlineServerStatus(server)
 
   if (!server.services) return { ...server, status: 'online' }
@@ -1255,7 +1254,7 @@ const api = createServer(async (request, response) => {
       const inventory = await readInventory()
       const reachability = new Map(await Promise.all(inventory
         .filter((server) => !server.teamCityAgent)
-        .map(async (server) => [serverStatusCacheKey(server.name), await isReachable(server.ip, server.checkPort || 443)])))
+        .map(async (server) => [serverStatusCacheKey(server.name), await isReachable(server.ip)])))
       const reachableInventory = inventory.filter((server) => server.teamCityAgent || reachability.get(serverStatusCacheKey(server.name)))
       const teamCityStatus = getTeamCityMachineStatus(reachableInventory, { force: requestUrl.searchParams.has('refresh') })
       const teamCityAgentStatus = inventory.some((server) => server.teamCityAgent) ? getTeamCityAgentInventory() : undefined
@@ -1277,7 +1276,7 @@ const api = createServer(async (request, response) => {
       if (serverName === undefined) return send(response, 400, { error: 'Invalid server name' })
       const server = inventory.find((item) => item.name === serverName)
       if (!server) return send(response, 404, { error: 'Server not found' })
-      const reachable = server.teamCityAgent ? false : await isReachable(server.ip, server.checkPort || 443)
+      const reachable = server.teamCityAgent ? false : await isReachable(server.ip)
       const teamCityStatus = reachable ? getTeamCityMachineStatus(inventory, {
           force: requestUrl.searchParams.has('refresh'),
           serverName: server.name,
@@ -1508,7 +1507,7 @@ const api = createServer(async (request, response) => {
         })
         return send(response, 200, { status: status?.services.get(serviceStatusKey(server.name, service.name)) || 'unknown' })
       }
-      if (!(await isReachable(server.ip, server.checkPort || 443))) return send(response, 200, { status: 'unknown', reason: 'Server is unreachable' })
+      if (!(await isReachable(server.ip))) return send(response, 200, { status: 'unknown', reason: 'Server is unreachable' })
       return send(response, 200, await remoteService(server.ip, service.serviceKey || service.name))
     }
     if (request.method === 'POST' && parts.length === 6 && parts[0] === 'api' && parts[1] === 'servers' && parts[3] === 'services' && ['start', 'stop'].includes(parts[5])) {
@@ -1530,7 +1529,7 @@ const api = createServer(async (request, response) => {
       let result
       try {
         if (teamCityServiceConfigured()) result = await queueTeamCityServiceAction(server, service, parts[5])
-        else if (!(await isReachable(server.ip, server.checkPort || 443))) result = { status: 'unknown', reason: 'Server is unreachable' }
+        else if (!(await isReachable(server.ip))) result = { status: 'unknown', reason: 'Server is unreachable' }
         else result = await remoteService(server.ip, service.serviceKey || service.name, parts[5])
       } finally {
         if (!result || result.status !== 'queued') serviceActionLocks.delete(actionKey)
@@ -1556,7 +1555,7 @@ const api = createServer(async (request, response) => {
       let result
       try {
         if (teamCityServiceConfigured()) result = await queueTeamCityIisRestart(server)
-        else if (!(await isReachable(server.ip, server.checkPort || 443))) result = { status: 'unknown', reason: 'Server is unreachable' }
+        else if (!(await isReachable(server.ip))) result = { status: 'unknown', reason: 'Server is unreachable' }
         else result = await remoteIisRestart(server.ip)
       } finally {
         if (!result || result.status !== 'queued') serviceActionLocks.delete(actionKey)
@@ -1636,6 +1635,7 @@ export {
   extractVenioVersion,
   filterTeamCityBuildsForBranch,
   getServerStatus,
+  isReachable,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,

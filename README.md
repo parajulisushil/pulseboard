@@ -85,7 +85,6 @@ Machine inventory belongs in `config/servers.json`. It is deliberately outside `
   "name": "Dev-QC01",
   "ip": "172.31.38.222",
   "remoteHost": "Dev-QC01",
-  "checkPort": 443,
   "group": "Test machines",
   "environment": "QA",
   "location": "East US",
@@ -96,7 +95,7 @@ Machine inventory belongs in `config/servers.json`. It is deliberately outside `
 }
 ```
 
-`serviceKey` is optional when the visible service name is also the Windows service name. `deploymentBuildTypeId` is optional and identifies the TeamCity pipeline queued by the machine's **Deploy latest** action. Omitting it keeps a machine manual-only, as with QC04. `releaseBranch` is an optional override; normally Pulseboard derives it from the version reported by the machine. Inventory is validated on each read; duplicate names and invalid ports cause readiness to fail instead of producing ambiguous controls.
+`serviceKey` is optional when the visible service name is also the Windows service name. `deploymentBuildTypeId` is optional and identifies the TeamCity pipeline queued by the machine's **Deploy latest** action. Omitting it keeps a machine manual-only, as with QC04. `releaseBranch` is an optional override; normally Pulseboard derives it from the version reported by the machine. Test-machine host availability uses the same ICMP probe as the Infrastructure page, so a stopped IIS site does not make an otherwise reachable machine appear offline. Inventory is validated on each read; duplicate names and invalid ports cause readiness to fail instead of producing ambiguous controls.
 
 ### Engineering infrastructure inventory
 

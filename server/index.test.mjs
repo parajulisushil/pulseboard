@@ -9,6 +9,7 @@ import {
   extractVenioVersion,
   filterTeamCityBuildsForBranch,
   getServerStatus,
+  isReachable,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,
@@ -73,6 +74,13 @@ test('offline test machines skip dependent status data and controls', async () =
   })
   const teamCitySource = { then: () => assert.fail('TeamCity status must not be awaited for an offline machine') }
   assert.deepEqual(await getServerStatus(server, teamCitySource, new Map(), undefined, false), offlineServerStatus(server))
+})
+
+test('uses the same ICMP host reachability signal as infrastructure monitoring', async () => {
+  const checks = []
+  assert.equal(await isReachable('192.0.2.10', { checkHost: async (ip) => { checks.push(ip); return { online: true, latencyMs: 4.2 } } }), true)
+  assert.equal(await isReachable('192.0.2.11', { checkHost: async (ip) => { checks.push(ip); return { online: false, latencyMs: null } } }), false)
+  assert.deepEqual(checks, ['192.0.2.10', '192.0.2.11'])
 })
 
 test('builds the TeamCity Console payload with the release version properties', () => {
