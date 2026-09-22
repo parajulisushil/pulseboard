@@ -137,6 +137,15 @@ function deploymentStatusLabel(deployment: Deployment) {
   return 'Build comparison unavailable'
 }
 
+function normalizedReleaseBranch(value?: string) {
+  const normalized = String(value || '').trim()
+  return normalized && !normalized.toLowerCase().startsWith('v') ? `v${normalized}` : normalized
+}
+
+function componentBuildActionKey(componentKey: string, branch?: string) {
+  return `build:${componentKey}:${normalizedReleaseBranch(branch).toLowerCase() || 'unconfigured'}`
+}
+
 function App() {
   const [servers, setServers] = useState<Server[]>([])
   const [activeSection, setActiveSection] = useState<Section>(() => sectionFromPath(window.location.pathname))
@@ -150,7 +159,6 @@ function App() {
   const [integrations, setIntegrations] = useState<IntegrationResponse>({})
   const [integrationsLoading, setIntegrationsLoading] = useState(false)
   const [releaseInput, setReleaseInput] = useState('')
-  const [checkedRelease, setCheckedRelease] = useState('')
   const [infrastructure, setInfrastructure] = useState<InfrastructureStatus>()
   const [infrastructureLoading, setInfrastructureLoading] = useState(false)
   const [infrastructureError, setInfrastructureError] = useState<string>()
@@ -173,6 +181,11 @@ function App() {
   const actionPollTimers = useRef(new Map<string, number>())
   const overviewSummaryInFlight = useRef(false)
   const statusRequestTimeoutMs = useRef(240000)
+  const integrationRefreshId = useRef(0)
+  const selectedIntegrationRelease = useRef('')
+  const lastSuccessfulIntegrationRelease = useRef('')
+  const visibleIntegrationBranch = useRef('')
+  const lastSuccessfulIntegrationBranch = useRef('')
 
   const showNotice = useCallback((message: string, tone: Notice['tone'] = 'info', durationMs = 3200) => {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
@@ -220,19 +233,31 @@ function App() {
     }
   }, [showNotice])
 
-  const refreshIntegrations = useCallback(async (releaseOverride = checkedRelease) => {
+  const refreshIntegrations = useCallback(async (releaseOverride?: string) => {
+    const selectedRelease = releaseOverride !== undefined ? releaseOverride : selectedIntegrationRelease.current
+    const refreshId = integrationRefreshId.current + 1
+    integrationRefreshId.current = refreshId
     setIntegrationsLoading(true)
     try {
-      const result = await apiRequest<IntegrationResponse>(`/api/integrations${releaseOverride ? `?release=${encodeURIComponent(releaseOverride)}` : ''}`)
+      const result = await apiRequest<IntegrationResponse>(`/api/integrations${selectedRelease ? `?release=${encodeURIComponent(selectedRelease)}` : ''}`)
+      if (refreshId !== integrationRefreshId.current) return
+      const successfulRelease = result.currentRelease?.isOverride ? result.currentRelease.value || selectedRelease : ''
+      const successfulBranch = result.teamcity?.branch || normalizedReleaseBranch(result.currentRelease?.value)
+      selectedIntegrationRelease.current = successfulRelease
+      lastSuccessfulIntegrationRelease.current = successfulRelease
+      visibleIntegrationBranch.current = successfulBranch
+      lastSuccessfulIntegrationBranch.current = successfulBranch
       setIntegrations(result)
-      setCheckedRelease(result.currentRelease?.isOverride ? result.currentRelease.value || releaseOverride : '')
       setReleaseInput((current) => current || result.currentRelease?.value || '')
     } catch (error) {
+      if (refreshId !== integrationRefreshId.current) return
+      selectedIntegrationRelease.current = lastSuccessfulIntegrationRelease.current
+      visibleIntegrationBranch.current = lastSuccessfulIntegrationBranch.current
       showNotice(error instanceof Error ? error.message : 'Unable to load pipeline status', 'error')
     } finally {
-      setIntegrationsLoading(false)
+      if (refreshId === integrationRefreshId.current) setIntegrationsLoading(false)
     }
-  }, [checkedRelease, showNotice])
+  }, [showNotice])
 
   const refreshInfrastructure = useCallback(async (force = false) => {
     setInfrastructureLoading(true)
@@ -497,7 +522,7 @@ function App() {
     }
   }, [clearPendingAction, pollDeployment, showNotice])
 
-  const pollComponentBuild = useCallback((component: TeamCityComponent, actionKey: string, buildId: number | string) => {
+  const pollComponentBuild = useCallback((component: TeamCityComponent, branch: string, actionKey: string, buildId: number | string) => {
     let attempts = 0
     let transientFailures = 0
     const poll = async () => {
@@ -507,23 +532,25 @@ function App() {
         transientFailures = 0
         if (result.status === 'queued' || result.status === 'running') {
           if (attempts < 180) {
-            showNotice(`${component.label} build is ${result.status} for ${teamCityReleaseBranch || 'CURRENT_RELEASE'}...`, 'info', 0)
+            if (normalizedReleaseBranch(visibleIntegrationBranch.current) === normalizedReleaseBranch(branch)) {
+              showNotice(`${component.label} build is ${result.status} for ${branch}...`, 'info', 0)
+            }
             const timer = window.setTimeout(() => void poll(), 3000)
             actionPollTimers.current.set(actionKey, timer)
           } else {
             clearPendingAction(actionKey)
-            showNotice(`${component.label} is still building; check TeamCity for progress`, 'error')
+            if (normalizedReleaseBranch(visibleIntegrationBranch.current) === normalizedReleaseBranch(branch)) {
+              showNotice(`${component.label} is still building for ${branch}; check TeamCity for progress`, 'error')
+            }
           }
           return
         }
         clearPendingAction(actionKey)
-        if (result.status === 'success') {
-          showNotice(`${component.label} build completed successfully`)
-          void refreshIntegrations()
-        } else {
-          showNotice(result.reason || `${component.label} build did not complete successfully`, 'error')
-          void refreshIntegrations()
+        if (normalizedReleaseBranch(visibleIntegrationBranch.current) === normalizedReleaseBranch(branch)) {
+          if (result.status === 'success') showNotice(`${component.label} build completed successfully for ${branch}`)
+          else showNotice(result.reason || `${component.label} build did not complete successfully for ${branch}`, 'error')
         }
+        void refreshIntegrations()
       } catch (error) {
         transientFailures += 1
         if (transientFailures < 3 && attempts < 180) {
@@ -532,17 +559,19 @@ function App() {
           return
         }
         clearPendingAction(actionKey)
-        showNotice(error instanceof Error ? error.message : `Unable to read ${component.label} build status`, 'error')
+        if (normalizedReleaseBranch(visibleIntegrationBranch.current) === normalizedReleaseBranch(branch)) {
+          showNotice(error instanceof Error ? error.message : `Unable to read ${component.label} build status`, 'error')
+        }
       }
     }
     void poll()
-  }, [clearPendingAction, refreshIntegrations, showNotice, teamCityReleaseBranch])
+  }, [clearPendingAction, refreshIntegrations, showNotice])
 
   const handleComponentBuild = useCallback(async (component: TeamCityComponent) => {
     if (!component.canTrigger) return
-    const actionKey = `build:${component.key}`
-    if (actionInFlight.current.has(actionKey)) return
     const branch = teamCityReleaseBranch || 'CURRENT_RELEASE'
+    const actionKey = componentBuildActionKey(component.key, branch)
+    if (actionInFlight.current.has(actionKey)) return
     const pendingLabel = `${component.pendingChanges}${component.truncated ? '+' : ''} pending ${component.pendingChanges === 1 ? 'change' : 'changes'}`
     const sourceLabel = component.pendingSources.length > 1
       ? ` across ${component.pendingSources.length} configurations`
@@ -558,16 +587,17 @@ function App() {
     actionInFlight.current.add(actionKey)
     setPendingActions((current) => [...current, actionKey])
     try {
-      const result = await apiRequest<{ status: string; reason?: string; buildId?: number | string }>(
+      const result = await apiRequest<{ status: string; reason?: string; buildId?: number | string; branch?: string }>(
         `/api/teamcity/components/${encodeURIComponent(component.key)}/trigger`,
         integrations.currentRelease?.isOverride
           ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Pulseboard-Request': '1' }, body: JSON.stringify({ release: branch }) }
           : { method: 'POST', headers: { 'X-Pulseboard-Request': '1' } },
       )
       if (result.status === 'queued' && result.buildId) {
-        showNotice(`${component.label} build queued for ${branch}...`, 'info', 0)
+        const queuedBranch = result.branch || branch
+        showNotice(`${component.label} build queued for ${queuedBranch}...`, 'info', 0)
         void refreshIntegrations()
-        pollComponentBuild(component, actionKey, result.buildId)
+        pollComponentBuild(component, queuedBranch, actionKey, result.buildId)
       } else {
         clearPendingAction(actionKey)
         showNotice(result.reason || `Unable to queue the ${component.label} build`, 'error')
@@ -583,11 +613,18 @@ function App() {
     event.preventDefault()
     const value = releaseInput.trim()
     if (!value) { showNotice('Enter a version to check.', 'error'); return }
+    selectedIntegrationRelease.current = value
+    visibleIntegrationBranch.current = normalizedReleaseBranch(value)
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
+    setNotice(null)
     await refreshIntegrations(value)
   }
 
   const handleUseConfiguredRelease = async () => {
-    setCheckedRelease('')
+    selectedIntegrationRelease.current = ''
+    visibleIntegrationBranch.current = normalizedReleaseBranch(integrations.currentRelease?.defaultValue)
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
+    setNotice(null)
     setReleaseInput(integrations.currentRelease?.defaultValue || '')
     await refreshIntegrations('')
   }
@@ -799,7 +836,7 @@ function App() {
                 <div className="integration-heading"><span className="integration-logo teamcity">▰</span><div><h3>TeamCity builds</h3><p>{integrations.teamcity?.branch || 'Pending changes by release branch'}</p></div><span className={`connection-dot ${integrations.teamcity?.status === 'unknown' ? 'disconnected' : ''}`} /></div>
                 <div className="teamcity-components">
                   {integrations.teamcity?.components?.length ? integrations.teamcity.components.map((component) => {
-                    const actionKey = `build:${component.key}`
+                    const actionKey = componentBuildActionKey(component.key, teamCityReleaseBranch)
                     const isPending = pendingActions.includes(actionKey)
                     const pendingCount = `${component.pendingChanges}${component.truncated ? '+' : ''}`
                     return <div className={`teamcity-component ${component.status}`} key={component.key}>
@@ -810,7 +847,7 @@ function App() {
                           <small>{component.reason || (component.activeBuild ? `Build ${component.activeBuild.number || component.activeBuild.id || ''} ${component.activeBuild.state || 'active'}` : component.pendingChanges ? `${pendingCount} pending ${component.pendingChanges === 1 ? 'change' : 'changes'}` : `No pending changes · ${component.checkedConfigurations} ${component.checkedConfigurations === 1 ? 'configuration' : 'configurations'} checked`)}</small>
                         </div>
                         {component.activeBuild?.webUrl && <a className="teamcity-active-link" href={component.activeBuild.webUrl} target="_blank" rel="noopener noreferrer">{component.activeBuild.state || 'active'}</a>}
-                        {(component.canTrigger || isPending) && <button type="button" className="teamcity-trigger-button" disabled={isPending} onClick={() => void handleComponentBuild(component)}>{isPending ? 'Queuing...' : 'Trigger build'}</button>}
+                        {(component.canTrigger || isPending) && <button type="button" className="teamcity-trigger-button" disabled={isPending} onClick={() => void handleComponentBuild(component)}>{isPending ? 'Tracking...' : 'Trigger build'}</button>}
                       </div>
                       {component.pendingSources.length > 0 && <div className="teamcity-pending-sources">{component.pendingSources.map((source) => `${source.name} (${source.pendingChanges})`).join(' · ')}</div>}
                     </div>

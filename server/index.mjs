@@ -333,7 +333,11 @@ async function getTeamCityActiveBuilds(configuration, branch) {
       branch: build.branchName || branch,
     }))
   }))
-  return results.flat()
+  return filterTeamCityBuildsForBranch(results.flat(), branch)
+}
+
+function filterTeamCityBuildsForBranch(builds, branch) {
+  return builds.filter((build) => !build.branch || build.branch === branch)
 }
 
 async function getTeamCityComponentActivity(configuration, branch) {
@@ -1618,6 +1622,7 @@ export {
   compareDeploymentBuilds,
   currentTeamCityBranch,
   extractVenioVersion,
+  filterTeamCityBuildsForBranch,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,

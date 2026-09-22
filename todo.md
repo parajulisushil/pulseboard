@@ -1,1 +1,1 @@
-add this in sushil.g.parajuli@gmail.com github
+- Schedule Deploy is not checking the same branch as it's deployed in the test machine

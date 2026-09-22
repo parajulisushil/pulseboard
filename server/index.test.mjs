@@ -7,6 +7,7 @@ import {
   compareDeploymentBuilds,
   currentTeamCityBranch,
   extractVenioVersion,
+  filterTeamCityBuildsForBranch,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,
@@ -41,6 +42,15 @@ test('uses CURRENT_RELEASE as the exact TeamCity activity branch', () => {
     if (previousRelease === undefined) delete process.env.CURRENT_RELEASE
     else process.env.CURRENT_RELEASE = previousRelease
   }
+})
+
+test('keeps active TeamCity status isolated to the selected branch', () => {
+  const builds = [
+    { id: 1, branch: 'v11.8.4.0', state: 'running' },
+    { id: 2, branch: 'v11.8.5.0', state: 'running' },
+    { id: 3, state: 'queued' },
+  ]
+  assert.deepEqual(filterTeamCityBuildsForBranch(builds, 'v11.8.4.0'), [builds[0], builds[2]])
 })
 
 test('builds the TeamCity Console payload with the release version properties', () => {
