@@ -1102,14 +1102,34 @@ function deploymentStatusForServer(server, deployedBuilds, releaseVersion, relea
   }
 }
 
-async function getServerStatus(server, teamCityStatusSource, latestComponentsByBranch, teamCityAgentSource) {
-  const [reachable, deployedBuilds, deployedVersion, latestRun, teamCityStatus, teamCityAgentInventory, recentDatabaseError] = await Promise.all([
-    server.teamCityAgent ? false : isReachable(server.ip, server.checkPort || 443),
+function offlineServerStatus(server) {
+  return {
+    ...server,
+    status: 'offline',
+    ...(server.services ? {
+      services: server.services.map((service) => ({ ...service, status: 'unknown' })),
+      diskSpace: { status: 'unknown', volumes: [], reason: 'Machine is offline; disk check was skipped' },
+    } : {}),
+  }
+}
+
+async function getServerStatus(server, teamCityStatusSource, latestComponentsByBranch, teamCityAgentSource, reachableOverride) {
+  if (server.teamCityAgent) {
+    const teamCityAgentInventory = await teamCityAgentSource
+    const agentStatus = summarizeTeamCityAgentStatus(server.ip, teamCityAgentInventory)
+    return { ...server, status: agentStatus.status, agentStatus }
+  }
+
+  const reachable = reachableOverride ?? await isReachable(server.ip, server.checkPort || 443)
+  if (!reachable) return offlineServerStatus(server)
+
+  if (!server.services) return { ...server, status: 'online' }
+
+  const [deployedBuilds, deployedVersion, latestRun, teamCityStatus, recentDatabaseError] = await Promise.all([
     getDeployedBuilds(server),
-    server.services ? getDeployedVersion(server) : undefined,
+    getDeployedVersion(server),
     getLatestDeploymentRun(server),
     teamCityStatusSource,
-    server.teamCityAgent ? teamCityAgentSource : undefined,
     server.group === 'Test machines' && sqlErrorChecksEnabled() ? readRecentSqlError(server) : undefined,
   ])
   const releaseBranch = server.releaseBranch || normalizeTeamCityBranch(deployedVersion)
@@ -1125,32 +1145,13 @@ async function getServerStatus(server, teamCityStatusSource, latestComponentsByB
     ...(deployment ? { deployment } : {}),
     ...(recentDatabaseError ? { recentDatabaseError } : {}),
   }
-  if (!server.services) {
-    if (server.teamCityAgent) {
-      const agentStatus = summarizeTeamCityAgentStatus(server.ip, teamCityAgentInventory)
-      return { ...serverWithData, status: agentStatus.status, agentStatus }
-    }
-    return {
-      ...serverWithData,
-      status: reachable ? 'online' : 'offline',
-    }
-  }
   const diskVolumes = teamCityStatus?.disks.get(serverStatusCacheKey(server.name)) || []
   const diskSpace = diskVolumes.length
     ? { status: 'available', volumes: diskVolumes }
     : { status: 'unknown', volumes: [], reason: 'Disk status was not reported by TeamCity' }
   if (teamCityStatus) {
     const services = server.services.map((service) => ({ ...service, status: teamCityStatus.services.get(serviceStatusKey(server.name, service.name)) || 'unknown' }))
-    const hasKnownService = services.some((service) => service.status !== 'unknown')
-    return { ...serverWithData, status: reachable || hasKnownService ? 'online' : 'offline', services, diskSpace }
-  }
-  if (!reachable) {
-    return {
-      ...serverWithData,
-      status: 'offline',
-      services: server.services.map((service) => ({ ...service, status: 'unknown' })),
-      diskSpace,
-    }
+    return { ...serverWithData, status: 'online', services, diskSpace }
   }
   const services = await Promise.all(server.services.map(async (service) => ({
       ...service,
@@ -1252,10 +1253,20 @@ const api = createServer(async (request, response) => {
 
     if (request.method === 'GET' && parts.length === 2 && parts[0] === 'api' && parts[1] === 'servers') {
       const inventory = await readInventory()
-      const teamCityStatus = getTeamCityMachineStatus(inventory, { force: requestUrl.searchParams.has('refresh') })
+      const reachability = new Map(await Promise.all(inventory
+        .filter((server) => !server.teamCityAgent)
+        .map(async (server) => [serverStatusCacheKey(server.name), await isReachable(server.ip, server.checkPort || 443)])))
+      const reachableInventory = inventory.filter((server) => server.teamCityAgent || reachability.get(serverStatusCacheKey(server.name)))
+      const teamCityStatus = getTeamCityMachineStatus(reachableInventory, { force: requestUrl.searchParams.has('refresh') })
       const teamCityAgentStatus = inventory.some((server) => server.teamCityAgent) ? getTeamCityAgentInventory() : undefined
       const latestComponentsByBranch = new Map()
-      return send(response, 200, await Promise.all(inventory.map((server) => getServerStatus(server, teamCityStatus, latestComponentsByBranch, teamCityAgentStatus))))
+      return send(response, 200, await Promise.all(inventory.map((server) => getServerStatus(
+        server,
+        teamCityStatus,
+        latestComponentsByBranch,
+        teamCityAgentStatus,
+        server.teamCityAgent ? undefined : reachability.get(serverStatusCacheKey(server.name)),
+      ))))
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/infrastructure-status') {
       return send(response, 200, await infrastructureMonitor.getStatus({ force: requestUrl.searchParams.has('refresh') }))
@@ -1266,12 +1277,13 @@ const api = createServer(async (request, response) => {
       if (serverName === undefined) return send(response, 400, { error: 'Invalid server name' })
       const server = inventory.find((item) => item.name === serverName)
       if (!server) return send(response, 404, { error: 'Server not found' })
-      const teamCityStatus = getTeamCityMachineStatus(inventory, {
-        force: requestUrl.searchParams.has('refresh'),
-        serverName: server.name,
-      })
+      const reachable = server.teamCityAgent ? false : await isReachable(server.ip, server.checkPort || 443)
+      const teamCityStatus = reachable ? getTeamCityMachineStatus(inventory, {
+          force: requestUrl.searchParams.has('refresh'),
+          serverName: server.name,
+        }) : undefined
       const teamCityAgentStatus = server.teamCityAgent ? getTeamCityAgentInventory() : undefined
-      return send(response, 200, await getServerStatus(server, teamCityStatus, new Map(), teamCityAgentStatus))
+      return send(response, 200, await getServerStatus(server, teamCityStatus, new Map(), teamCityAgentStatus, reachable))
     }
     if (request.method === 'GET' && parts.length === 2 && parts[0] === 'api' && parts[1] === 'integrations') {
       const releaseParameter = requestUrl.searchParams.get('release')
@@ -1623,9 +1635,11 @@ export {
   currentTeamCityBranch,
   extractVenioVersion,
   filterTeamCityBuildsForBranch,
+  getServerStatus,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,
+  offlineServerStatus,
   parseDeployedBuildsPage,
   parseTeamCityDiskStatuses,
   parseTeamCityServiceStatuses,

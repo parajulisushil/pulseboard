@@ -8,9 +8,11 @@ import {
   currentTeamCityBranch,
   extractVenioVersion,
   filterTeamCityBuildsForBranch,
+  getServerStatus,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,
+  offlineServerStatus,
   parseDeployedBuildsPage,
   parseTeamCityDiskStatuses,
   parseTeamCityServiceStatuses,
@@ -51,6 +53,26 @@ test('keeps active TeamCity status isolated to the selected branch', () => {
     { id: 3, state: 'queued' },
   ]
   assert.deepEqual(filterTeamCityBuildsForBranch(builds, 'v11.8.4.0'), [builds[0], builds[2]])
+})
+
+test('offline test machines skip dependent status data and controls', async () => {
+  const server = {
+    name: 'Offline-QC',
+    ip: '192.0.2.10',
+    group: 'Test machines',
+    environment: 'QA',
+    location: 'Test',
+    services: [{ name: 'Search' }, { name: 'Export' }],
+    deploymentBuildTypeId: 'Deploy_Offline_QC',
+  }
+  assert.deepEqual(offlineServerStatus(server), {
+    ...server,
+    status: 'offline',
+    services: [{ name: 'Search', status: 'unknown' }, { name: 'Export', status: 'unknown' }],
+    diskSpace: { status: 'unknown', volumes: [], reason: 'Machine is offline; disk check was skipped' },
+  })
+  const teamCitySource = { then: () => assert.fail('TeamCity status must not be awaited for an offline machine') }
+  assert.deepEqual(await getServerStatus(server, teamCitySource, new Map(), undefined, false), offlineServerStatus(server))
 })
 
 test('builds the TeamCity Console payload with the release version properties', () => {

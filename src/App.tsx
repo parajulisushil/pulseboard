@@ -935,7 +935,7 @@ function App() {
                           <span className="service-dot unknown" aria-hidden="true" />
                           <span className="service-name">IIS web server</span>
                           <span className="service-status unknown">web control</span>
-                          <button type="button" className="service-action-button restart" disabled={pendingActions.includes(`${server.name}:IIS`)} onClick={() => void handleServiceAction(server.name, 'IIS', 'restart')}>{pendingActions.includes(`${server.name}:IIS`) ? 'Restarting...' : 'Restart IIS'}</button>
+                          <button type="button" className="service-action-button restart" disabled={server.status !== 'online' || pendingActions.includes(`${server.name}:IIS`)} onClick={() => void handleServiceAction(server.name, 'IIS', 'restart')} title={server.status === 'online' ? 'Restart IIS' : 'Unavailable while the machine is offline'}>{pendingActions.includes(`${server.name}:IIS`) ? 'Restarting...' : 'Restart IIS'}</button>
                         </div>
                         {server.services.map((service) => {
                         const action: ServiceAction | null = service.status === 'running' ? 'stop' : service.status === 'stopped' ? 'start' : null
@@ -946,7 +946,7 @@ function App() {
                             <span className={`service-dot ${service.status}`} aria-hidden="true" />
                             <span className="service-name">{service.name}</span>
                             <span className={`service-status ${service.status}`}>{service.status}</span>
-                            {action && <button type="button" className={`service-action-button ${action}`} disabled={isPending} onClick={() => void handleServiceAction(server.name, service.name, action)}>{isPending ? `${action === 'start' ? 'Starting' : 'Stopping'}...` : `${action === 'start' ? 'Start' : 'Stop'} service`}</button>}
+                            {action && <button type="button" className={`service-action-button ${action}`} disabled={server.status !== 'online' || isPending} onClick={() => void handleServiceAction(server.name, service.name, action)}>{isPending ? `${action === 'start' ? 'Starting' : 'Stopping'}...` : `${action === 'start' ? 'Start' : 'Stop'} service`}</button>}
                           </div>
                         )
                       })}</div>
