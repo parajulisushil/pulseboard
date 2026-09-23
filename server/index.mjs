@@ -29,6 +29,7 @@ const serviceActionLocks = new Map()
 const deploymentActionLocks = new Map()
 const componentBuildActionLocks = new Map()
 const teamCityDependencyCache = new Map()
+const teamCityProjectCache = new Map()
 const infrastructureActionLocks = new Map()
 let shuttingDown = false
 
@@ -281,6 +282,32 @@ async function getTeamCityDependencyGraph(buildTypeId) {
   return sources
 }
 
+async function getTeamCityProjectBuildTypes(projectId) {
+  const cached = teamCityProjectCache.get(projectId)
+  if (cached?.expiresAt > Date.now()) return cached.sources
+
+  const locator = encodeURIComponent(`affectedProject:(id:${projectId}),paused:false,count:1000`)
+  const fields = encodeURIComponent('count,nextHref,buildType(id,name,projectName,projectId,webUrl)')
+  const data = await getTeamCityJson(`/app/rest/buildTypes?locator=${locator}&fields=${fields}`)
+  if (data.nextHref) throw new Error('Console project contains more than 1000 build configurations')
+  const sources = (data.buildType || []).map((buildType) => ({
+    buildTypeId: buildType.id,
+    name: teamCitySourceName(buildType),
+    projectName: buildType.projectName,
+    webUrl: buildType.webUrl,
+  }))
+  teamCityProjectCache.set(projectId, { expiresAt: Date.now() + 5 * 60 * 1000, sources })
+  return sources
+}
+
+function mergeTeamCitySources(...sourceGroups) {
+  const sources = new Map()
+  for (const source of sourceGroups.flat()) {
+    if (source?.buildTypeId && !sources.has(source.buildTypeId)) sources.set(source.buildTypeId, source)
+  }
+  return [...sources.values()]
+}
+
 async function getTeamCityPendingChanges(source, branch) {
   const locator = encodeURIComponent(`buildType:(id:${source.buildTypeId}),pending:true,branch:(name:${branch}),count:1000`)
   const fields = encodeURIComponent('count,nextHref,change(id,version,date,username,webUrl)')
@@ -319,10 +346,11 @@ function aggregatePendingChangeSources(sources) {
   return { pendingChanges: uniqueChanges.size, pendingSources, truncated }
 }
 
-async function getTeamCityActiveBuilds(configuration, branch) {
+async function getTeamCityActiveBuilds(configuration, branch, sources) {
   const fields = encodeURIComponent('build(id,number,state,status,webUrl,startDate,queuedDate,buildTypeId,branchName)')
-  const results = await Promise.all(['running', 'queued'].map(async (state) => {
-    const locator = encodeURIComponent(`buildType:(id:${configuration.buildTypeId}),branch:(name:${branch}),state:${state},personal:false,count:10`)
+  const buildTypeIds = sources?.length ? sources.map((source) => source.buildTypeId) : [configuration.buildTypeId]
+  const results = await Promise.all(buildTypeIds.flatMap((buildTypeId) => ['running', 'queued'].map(async (state) => {
+    const locator = encodeURIComponent(`buildType:(id:${buildTypeId}),branch:(name:${branch}),state:${state},personal:false,count:10`)
     const data = await getTeamCityJson(`/app/rest/builds?locator=${locator}&fields=${fields}`)
     return (data.build || []).map((build) => ({
       id: build.id,
@@ -332,10 +360,10 @@ async function getTeamCityActiveBuilds(configuration, branch) {
       webUrl: build.webUrl,
       startDate: build.startDate,
       queuedDate: build.queuedDate,
-      buildTypeId: build.buildTypeId || configuration.buildTypeId,
+      buildTypeId: build.buildTypeId || buildTypeId,
       branch: build.branchName || branch,
     }))
-  }))
+  })))
   return filterTeamCityBuildsForBranch(results.flat(), branch)
 }
 
@@ -346,12 +374,14 @@ function filterTeamCityBuildsForBranch(builds, branch) {
 async function getTeamCityComponentActivity(configuration, branch) {
   const fallbackUrl = teamCityBuildTypeUrl(configuration.buildTypeId, branch)
   try {
-    const sources = configuration.includeDependencies
-      ? await getTeamCityDependencyGraph(configuration.buildTypeId)
-      : [{ buildTypeId: configuration.buildTypeId, name: configuration.label, webUrl: fallbackUrl }]
+    let sources = [{ buildTypeId: configuration.buildTypeId, name: configuration.label, webUrl: fallbackUrl }]
+    if (configuration.includeDependencies) sources = await getTeamCityDependencyGraph(configuration.buildTypeId)
+    if (configuration.projectId) {
+      sources = mergeTeamCitySources(sources, await getTeamCityProjectBuildTypes(configuration.projectId))
+    }
     const [sourceResults, builds] = await Promise.all([
       Promise.all(sources.map((source) => getTeamCityPendingChanges(source, branch))),
-      getTeamCityActiveBuilds(configuration, branch),
+      getTeamCityActiveBuilds(configuration, branch, sources),
     ])
     const pending = aggregatePendingChangeSources(sourceResults)
     const activeBuild = builds[0]
@@ -793,6 +823,7 @@ function teamCityComponentBuildTypes() {
       name: 'Console',
       label: 'Console',
       buildTypeId: configuredValue('TEAMCITY_CONSOLE_BUILD_TYPE_ID') || 'MainRepository_Venio_VenioFRPWixSetup_Default',
+      projectId: configuredValue('TEAMCITY_CONSOLE_PROJECT_ID') || 'MainRepository_Venio',
       includeDependencies: true,
     },
     {
@@ -1672,6 +1703,7 @@ export {
   filterTeamCityBuildsForBranch,
   getServerStatus,
   isReachable,
+  mergeTeamCitySources,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,

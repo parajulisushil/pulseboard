@@ -10,6 +10,7 @@ import {
   filterTeamCityBuildsForBranch,
   getServerStatus,
   isReachable,
+  mergeTeamCitySources,
   normalizeTeamCityDate,
   normalizeTeamCityBranch,
   normalizeReleaseCheck,
@@ -174,6 +175,23 @@ test('deduplicates Console pending changes across dependency configurations', ()
     ],
     truncated: false,
   })
+})
+
+test('includes Console project configurations that are outside the setup dependency graph', () => {
+  assert.deepEqual(mergeTeamCitySources(
+    [
+      { buildTypeId: 'Console_Setup', name: 'Setup' },
+      { buildTypeId: 'Console_Desktop', name: 'Desktop' },
+    ],
+    [
+      { buildTypeId: 'Console_Desktop', name: 'Duplicate desktop' },
+      { buildTypeId: 'Console_Utility', name: 'Utility' },
+    ],
+  ), [
+    { buildTypeId: 'Console_Setup', name: 'Setup' },
+    { buildTypeId: 'Console_Desktop', name: 'Desktop' },
+    { buildTypeId: 'Console_Utility', name: 'Utility' },
+  ])
 })
 
 test('derives TeamCity agent availability from connected instances and running builds', () => {
