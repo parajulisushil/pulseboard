@@ -42,6 +42,7 @@ COPY --chown=node:node --from=build /app/server/deployment-verification.mjs ./se
 COPY --chown=node:node --from=build /app/server/sql-errors.mjs ./server/sql-errors.mjs
 COPY --chown=node:node --from=build /app/server/check-sql-error.mjs ./server/check-sql-error.mjs
 COPY --chown=node:node --from=build /app/server/infrastructure-status.mjs ./server/infrastructure-status.mjs
+COPY --chown=node:node --from=build /app/server/ec2-control.mjs ./server/ec2-control.mjs
 COPY --chown=node:node --from=build /app/server/scheduled-jobs.mjs ./server/scheduled-jobs.mjs
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
