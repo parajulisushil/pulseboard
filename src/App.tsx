@@ -88,7 +88,7 @@ type Integration = { provider: string; status: string; reason?: string; id?: num
 type CurrentRelease = { value?: string; defaultValue?: string; isOverride?: boolean; pipeline?: string; environment?: string; reason?: string }
 type IntegrationResponse = { currentRelease?: CurrentRelease; gitlab?: Integration; teamcity?: Integration }
 type DashboardConfig = { autoRefreshSeconds: number; statusRequestTimeoutMs: number }
-type InfrastructureMachine = { name: string; ip: string; online: boolean; latencyMs: number | null; lastChecked: string }
+type InfrastructureMachine = { name: string; ip: string; instanceId?: string; awsRegion?: string; ec2ControlEnabled?: boolean; online: boolean; latencyMs: number | null; lastChecked: string }
 type InfrastructurePanel = { title: string; servers: InfrastructureMachine[] }
 type InfrastructureStatus = { panels: InfrastructurePanel[]; onlineCount: number; totalCount: number; generatedAt: string; refreshSeconds: number }
 type Notice = { message: string; tone: 'info' | 'error' }
@@ -450,6 +450,71 @@ function App() {
     }
   }, [clearPendingAction, pollTeamCityAction, refreshServer, showNotice])
 
+  const pollInfrastructureAction = useCallback((serverName: string, action: 'start' | 'stop', actionKey: string) => {
+    let attempts = 0
+    let transientFailures = 0
+    const poll = async () => {
+      attempts += 1
+      try {
+        const result = await apiRequest<InfrastructureStatus>('/api/infrastructure-status?refresh=1', {}, 10000)
+        transientFailures = 0
+        setInfrastructure(result)
+        setInfrastructureError(undefined)
+        setInfrastructureLastRefresh(new Date(result.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+        const machine = result.panels.flatMap((panel) => panel.servers).find((server) => server.name === serverName)
+        const finished = machine && (action === 'start' ? machine.online : !machine.online)
+        if (finished) {
+          clearPendingAction(actionKey)
+          showNotice(`${serverName} is ${action === 'start' ? 'online' : 'offline'}`)
+          return
+        }
+        if (attempts < 60) {
+          showNotice(`${action === 'start' ? 'Starting' : 'Stopping'} ${serverName}...`, 'info', 0)
+          const timer = window.setTimeout(() => void poll(), 5000)
+          actionPollTimers.current.set(actionKey, timer)
+          return
+        }
+        clearPendingAction(actionKey)
+        showNotice(`${serverName} has not become ${action === 'start' ? 'reachable' : 'unreachable'} yet; refresh to check again`, 'error')
+      } catch (error) {
+        transientFailures += 1
+        if (transientFailures < 3 && attempts < 60) {
+          const timer = window.setTimeout(() => void poll(), 5000)
+          actionPollTimers.current.set(actionKey, timer)
+          return
+        }
+        clearPendingAction(actionKey)
+        showNotice(error instanceof Error ? error.message : `Unable to check ${serverName}`, 'error')
+      }
+    }
+    const timer = window.setTimeout(() => void poll(), 5000)
+    actionPollTimers.current.set(actionKey, timer)
+  }, [clearPendingAction, showNotice])
+
+  const handleInfrastructureAction = useCallback(async (server: InfrastructureMachine, action: 'start' | 'stop') => {
+    const actionKey = `ec2:${server.name}`
+    if (!server.ec2ControlEnabled || actionInFlight.current.has(actionKey)) return
+    if (action === 'stop' && !window.confirm(`Stop ${server.name}? Active work on this instance will be interrupted.`)) return
+    actionInFlight.current.add(actionKey)
+    setPendingActions((current) => [...current, actionKey])
+    try {
+      const result = await apiRequest<{ status: string; message?: string }>(
+        `/api/infrastructure-status/${encodeURIComponent(server.name)}/${action}`,
+        { method: 'POST', headers: { 'X-Pulseboard-Request': '1' } },
+      )
+      if (result.status !== 'accepted') {
+        clearPendingAction(actionKey)
+        showNotice(result.message || `Unable to ${action} ${server.name}`, 'error')
+        return
+      }
+      showNotice(`${action === 'start' ? 'Starting' : 'Stopping'} ${server.name}...`, 'info', 0)
+      pollInfrastructureAction(server.name, action, actionKey)
+    } catch (error) {
+      clearPendingAction(actionKey)
+      showNotice(error instanceof Error ? error.message : `Unable to ${action} ${server.name}`, 'error')
+    }
+  }, [clearPendingAction, pollInfrastructureAction, showNotice])
+
   const pollDeployment = useCallback((serverName: string, actionKey: string, buildId: number | string) => {
     let attempts = 0
     let transientFailures = 0
@@ -772,7 +837,17 @@ function App() {
               {panel.servers.map((server) => <article className={`infrastructure-card ${server.online ? 'online' : 'offline'}`} key={server.name}>
                 <div className="infrastructure-card-heading"><span className={`server-status ${server.online ? 'online' : 'offline'}`} aria-label={server.online ? 'online' : 'offline'} /><h3>{server.name}</h3><strong>{server.online ? 'Online' : 'Offline'}</strong></div>
                 <p>{server.ip}</p>
-                <div><span>{server.latencyMs === null ? 'No response' : `${server.latencyMs} ms`}</span><time dateTime={server.lastChecked}>{new Date(server.lastChecked).toLocaleTimeString()}</time></div>
+                <div className="infrastructure-card-status"><span>{server.latencyMs === null ? 'No response' : `${server.latencyMs} ms`}</span><time dateTime={server.lastChecked}>{new Date(server.lastChecked).toLocaleTimeString()}</time></div>
+                {server.ec2ControlEnabled && (() => {
+                  const actionKey = `ec2:${server.name}`
+                  const isPending = pendingActions.includes(actionKey)
+                  const action = server.online ? 'stop' : 'start'
+                  return <div className="infrastructure-actions">
+                    <button type="button" className={`service-action-button ${action}`} disabled={isPending} onClick={() => void handleInfrastructureAction(server, action)}>
+                      {isPending ? (action === 'start' ? 'Starting...' : 'Stopping...') : `${action === 'start' ? 'Start' : 'Stop'} instance`}
+                    </button>
+                  </div>
+                })()}
               </article>)}
             </div>
           </section>)}

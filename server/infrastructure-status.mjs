@@ -17,6 +17,10 @@ export function validateInfrastructureInventory(inventory) {
     requireText(server.name, `Infrastructure server ${index} name`)
     requireText(server.ip, `${server.name} ip`)
     requireText(server.panel, `${server.name} panel`)
+    if (server.instanceId !== undefined && !/^i-[0-9a-f]{8,17}$/i.test(server.instanceId)) throw new Error(`${server.name} instanceId must be a valid EC2 instance ID`)
+    if (server.awsRegion !== undefined && !/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(server.awsRegion)) throw new Error(`${server.name} awsRegion must be a valid AWS region`)
+    if (server.ec2Control !== undefined && typeof server.ec2Control !== 'boolean') throw new Error(`${server.name} ec2Control must be a boolean`)
+    if (server.ec2Control === true && !server.instanceId) throw new Error(`${server.name} must have an instanceId when ec2Control is enabled`)
     if (!/^[A-Za-z0-9][A-Za-z0-9 ._()/-]{0,127}$/.test(server.name)) throw new Error(`${server.name} contains unsupported characters`)
     if (!/^[A-Za-z0-9][A-Za-z0-9.:-]{0,254}$/.test(server.ip)) throw new Error(`${server.name} ip contains unsupported characters`)
     if (server.panel.length > 80 || /[\r\n]/.test(server.panel)) throw new Error(`${server.name} panel contains unsupported characters`)
@@ -59,12 +63,16 @@ export function groupInfrastructureStatuses(inventory, statuses, generatedAt = n
       panelsByTitle.set(server.panel, panel)
       panels.push(panel)
     }
-    panelsByTitle.get(server.panel).servers.push(statuses.get(server.name) || {
+    const status = statuses.get(server.name)
+    panelsByTitle.get(server.panel).servers.push({
       name: server.name,
       ip: server.ip,
-      online: false,
-      latencyMs: null,
-      lastChecked: generatedAt,
+      instanceId: server.instanceId,
+      awsRegion: server.awsRegion,
+      ec2Control: server.ec2Control === true,
+      online: status?.online ?? false,
+      latencyMs: status?.latencyMs ?? null,
+      lastChecked: status?.lastChecked ?? generatedAt,
     })
   }
   const servers = panels.flatMap((panel) => panel.servers)
@@ -89,6 +97,9 @@ export function createInfrastructureMonitor({ inventoryPath, checkHost = pingHos
       return [server.name, {
         name: server.name,
         ip: server.ip,
+        instanceId: server.instanceId,
+        awsRegion: server.awsRegion,
+        ec2Control: server.ec2Control === true,
         online: result.online,
         latencyMs: result.latencyMs,
         lastChecked: checkedAt,

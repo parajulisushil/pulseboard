@@ -11,6 +11,7 @@ import { createDeploymentScheduler, DeploymentScheduleError, readScheduleRequest
 import { createScheduledJobManager, readScheduledJobRequest, ScheduledJobError } from './scheduled-jobs.mjs'
 import { readRecentSqlError, sqlErrorChecksEnabled } from './sql-errors.mjs'
 import { createInfrastructureMonitor, pingHost, readInfrastructureInventory } from './infrastructure-status.mjs'
+import { controlEc2Instance, ec2ControlEnabled, validateEc2ControlConfig } from './ec2-control.mjs'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.join(root, '..')
@@ -28,6 +29,7 @@ const serviceActionLocks = new Map()
 const deploymentActionLocks = new Map()
 const componentBuildActionLocks = new Map()
 const teamCityDependencyCache = new Map()
+const infrastructureActionLocks = new Map()
 let shuttingDown = false
 
 const infrastructureMonitor = createInfrastructureMonitor({ inventoryPath: infrastructureInventoryPath })
@@ -125,6 +127,7 @@ function validateRuntimeConfig() {
   if (process.env.NODE_ENV === 'production' && authenticationMode() === 'none') {
     throw new Error('AUTH_MODE=none is not allowed when NODE_ENV=production')
   }
+  validateEc2ControlConfig()
 }
 
 function secureEqual(actual, expected) {
@@ -1268,7 +1271,40 @@ const api = createServer(async (request, response) => {
       ))))
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/infrastructure-status') {
-      return send(response, 200, await infrastructureMonitor.getStatus({ force: requestUrl.searchParams.has('refresh') }))
+      const status = await infrastructureMonitor.getStatus({ force: requestUrl.searchParams.has('refresh') })
+      return send(response, 200, {
+        ...status,
+        panels: status.panels.map((panel) => ({
+          ...panel,
+          servers: panel.servers.map((server) => ({ ...server, ec2ControlEnabled: ec2ControlEnabled() && server.ec2Control === true && Boolean(server.instanceId) })),
+        })),
+      })
+    }
+    if (request.method === 'POST' && parts.length === 4 && parts[0] === 'api' && parts[1] === 'infrastructure-status' && ['start', 'stop'].includes(parts[3])) {
+      if (request.headers['x-pulseboard-request'] !== '1') return send(response, 403, { error: 'Missing request verification header' })
+      if (!ec2ControlEnabled()) return send(response, 503, { error: 'EC2 instance control is disabled' })
+      const serverName = decodePathPart(parts[2])
+      if (serverName === undefined) return send(response, 400, { error: 'Invalid server name' })
+      const server = (await readInfrastructureInventory(infrastructureInventoryPath)).find((item) => item.name === serverName)
+      if (!server) return send(response, 404, { error: 'Infrastructure server not found' })
+      if (server.ec2Control !== true) return send(response, 403, { error: 'EC2 control is not enabled for this server' })
+      if (!server.instanceId) return send(response, 409, { error: 'EC2 control is not configured for this server' })
+      const actionKey = server.instanceId.toLowerCase()
+      const lockedUntil = infrastructureActionLocks.get(actionKey) || 0
+      if (lockedUntil > Date.now()) {
+        return send(response, 409, { error: 'An EC2 action is already in progress; retry shortly' }, { 'Retry-After': String(Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000))) })
+      }
+      infrastructureActionLocks.set(actionKey, Date.now() + 15000)
+      try {
+        const result = await controlEc2Instance(server.instanceId, parts[3])
+        log('info', 'ec2_action_requested', { requestId, server: server.name, instanceId: server.instanceId, action: parts[3], result: result.status })
+        return send(response, 202, { ...result, machine: server.name })
+      } catch (error) {
+        infrastructureActionLocks.delete(actionKey)
+        const message = error instanceof Error ? error.message : 'EC2 control request failed'
+        log('warn', 'ec2_action_failed', { requestId, server: server.name, instanceId: server.instanceId, action: parts[3], error: message })
+        return send(response, 502, { error: message })
+      }
     }
     if (request.method === 'GET' && parts.length === 3 && parts[0] === 'api' && parts[1] === 'servers') {
       const inventory = await readInventory()

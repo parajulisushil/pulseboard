@@ -43,6 +43,9 @@ Copy `.env.example` to `.env` and replace every placeholder used by your deploym
 | `DISK_CRITICAL_PERCENT_FREE` | No | Marks a fixed volume as critical; defaults to 10% free and must be lower than the warning threshold |
 | `INVENTORY_PATH` | No | Inventory path relative to the project root; defaults to `config/servers.json` |
 | `INFRASTRUCTURE_INVENTORY_PATH` | No | Engineering infrastructure inventory path relative to the project root; defaults to `config/infrastructure-servers.json` |
+| `EC2_CONTROL_ENABLED` | No | Enables start/stop buttons for infrastructure entries with an `instanceId` and `ec2Control: true`; defaults to `false` |
+| `EC2_CONTROL_URL` / `EC2_CONTROL_SIGNING_SECRET` / `EC2_CONTROL_USER_ID` | When EC2 control is enabled | API Gateway URL, shared HMAC secret, and your existing Slack user ID for the Lambda allowlist and `StartedBy` tag |
+| `EC2_CONTROL_TIMEOUT_MS` | No | Lambda request timeout from 1,000 to 60,000 milliseconds; defaults to 15,000 |
 | `SERVICE_CHECKS_ENABLED` | No | Enables direct PowerShell service checks when TeamCity service control is unavailable |
 | `SQL_ERROR_CHECKS_ENABLED` | No | Enables a read-only latest PCD exception query for each test machine |
 | `SQL_USERNAME` / `SQL_PASSWORD` / `SQL_PCD_DATABASE` | When SQL checks are enabled | Shared read-only SQL login and PCD database name; the SQL host is each test machine's inventory IP |
@@ -110,6 +113,8 @@ The separate **Infrastructure status** page reads `config/infrastructure-servers
 ```
 
 Pulseboard sends one ICMP echo request to every entry, with a one-second response timeout, and caches the completed snapshot for 60 seconds. A manual refresh bypasses that cache. Checks run on the Pulseboard API host; it must have network routes to these addresses and permission to execute `ping`. The Docker image includes `iputils-ping` with its raw-socket file capability removed, and Compose grants its unprivileged `node` user access to ICMP datagram sockets through the container-scoped `net.ipv4.ping_group_range` sysctl. This retains the dropped-capability and no-new-privileges restrictions. This inventory is independent of the daily test-machine inventory, so infrastructure entries never receive service, deployment, SQL-error, or TeamCity controls. The authenticated endpoint is `GET /api/infrastructure-status`; add `?refresh=1` to force a new check.
+
+When `EC2_CONTROL_ENABLED=true`, infrastructure entries containing both an `instanceId` and `"ec2Control": true` expose a start or stop button. The API signs the existing Lambda form contract (`user_id` plus `text`) with a timestamped HMAC and never returns the endpoint or signing secret to the browser. Set the Lambda's `APPLICATION_SIGNING_SECRET` to the same random value as `EC2_CONTROL_SIGNING_SECRET`, and apply the generic verifier in `docs/ec2-control-lambda-changes.md`. The configured Slack user ID continues to drive the Lambda's existing allowlists, `StartedBy` tag, and notification mention. Start/stop progress uses ICMP reachability, so a running instance that blocks ping can still appear offline.
 
 Set `teamCityAgent: true` on an infrastructure inventory entry that represents a TeamCity build-agent host. Pulseboard then matches all TeamCity agent instances by the entry's `ip` and uses TeamCity's `connected` state instead of probing TCP port 443. The card also shows the number of connected instances and any current builds.
 

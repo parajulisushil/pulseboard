@@ -364,6 +364,12 @@ test('serves health checks and protects API routes', async (context) => {
   })
   assert.equal(unverifiedAction.status, 403)
 
+  const unverifiedEc2Action = await fetch(`${baseUrl}/api/infrastructure-status/Dev-QC01/stop`, {
+    method: 'POST',
+    headers: { Authorization: authorization },
+  })
+  assert.equal(unverifiedEc2Action.status, 403)
+
   const unverifiedIisRestart = await fetch(`${baseUrl}/api/servers/Dev-QC01/iis/restart`, {
     method: 'POST',
     headers: { Authorization: authorization },

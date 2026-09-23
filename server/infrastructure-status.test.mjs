@@ -3,7 +3,7 @@ import test from 'node:test'
 import { groupInfrastructureStatuses, pingArguments, validateInfrastructureInventory } from './infrastructure-status.mjs'
 
 const inventory = [
-  { name: 'Dev-QC01', ip: '172.31.38.222', panel: 'Dev Servers' },
+  { name: 'Dev-QC01', ip: '172.31.38.222', panel: 'Dev Servers', instanceId: 'i-024be3ccef4134447', awsRegion: 'us-east-1', ec2Control: true },
   { name: 'Compatibility 2', ip: '172.31.42.230', panel: 'Compatibility' },
   { name: 'FS02', ip: '172.31.43.227', panel: 'Other Servers' },
 ]
@@ -22,6 +22,18 @@ test('validates and explicitly groups the infrastructure inventory', () => {
   assert.equal(result.onlineCount, 1)
   assert.equal(result.totalCount, 3)
   assert.equal(result.panels[1].servers[0].online, false)
+  assert.equal(result.panels[0].servers[0].instanceId, 'i-024be3ccef4134447')
+  assert.equal(result.panels[0].servers[0].awsRegion, 'us-east-1')
+  assert.equal(result.panels[0].servers[0].ec2Control, true)
+  assert.throws(() => validateInfrastructureInventory([
+    { name: 'Invalid EC2', ip: '127.0.0.1', panel: 'Other', instanceId: 'not-an-instance' },
+  ]), /valid EC2 instance ID/)
+  assert.throws(() => validateInfrastructureInventory([
+    { name: 'Invalid control flag', ip: '127.0.0.1', panel: 'Other', ec2Control: 'yes' },
+  ]), /ec2Control must be a boolean/)
+  assert.throws(() => validateInfrastructureInventory([
+    { name: 'Missing instance', ip: '127.0.0.1', panel: 'Other', ec2Control: true },
+  ]), /must have an instanceId/)
 })
 
 test('uses platform-specific one-packet ping arguments', () => {
