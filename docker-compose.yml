@@ -1,6 +1,6 @@
 services:
   pulseboard:
-    image: gpsushil/pulseboard:latest
+    image: "${PULSEBOARD_IMAGE:-gpsushil/pulseboard}:${IMAGE_TAG:-latest}"
     ports:
       - "${PULSEBOARD_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-3001}:${API_PORT:-3001}"
     env_file:
