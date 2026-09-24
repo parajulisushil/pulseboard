@@ -6,6 +6,8 @@ services:
     env_file:
       - path: .env
         format: raw
+    dns:
+      - 172.31.71.219
     init: true
     read_only: true
     volumes:
