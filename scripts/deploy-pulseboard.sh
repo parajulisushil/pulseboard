@@ -9,7 +9,7 @@ Pull and deploy Pulseboard with Docker Compose. IMAGE_TAG defaults to "latest"
 and may also be an exact commit SHA published by the Docker workflow.
 
 Environment variables:
-  PULSEBOARD_DIR          Compose project directory (default: /opt/pulseboard)
+  PULSEBOARD_DIR          Compose project directory (default: /home/sus/apps/pulseboard)
   DEPLOY_TIMEOUT_SECONDS  Health-check timeout in seconds (default: 180)
   PULSEBOARD_IMAGE        Docker image without a tag (default comes from Compose)
 EOF
@@ -21,7 +21,7 @@ if (( $# > 1 )); then
 fi
 
 image_tag="${1:-${IMAGE_TAG:-latest}}"
-project_dir="${PULSEBOARD_DIR:-/opt/pulseboard}"
+project_dir="${PULSEBOARD_DIR:-/home/sus/apps/pulseboard}"
 deploy_timeout="${DEPLOY_TIMEOUT_SECONDS:-180}"
 
 if [[ ! "$image_tag" =~ ^[A-Za-z0-9._-]+$ ]]; then

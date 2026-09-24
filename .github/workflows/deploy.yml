@@ -45,7 +45,7 @@ jobs:
           echo "Deploying image tag: $IMAGE_TAG"
 
           tailscale ssh "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd /opt/pulseboard && \
+            "cd /home/sus/apps/pulseboard && \
              IMAGE_TAG='${IMAGE_TAG}' docker compose pull && \
              IMAGE_TAG='${IMAGE_TAG}' docker compose up -d --remove-orphans && \
              docker compose ps"

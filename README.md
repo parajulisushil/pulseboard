@@ -236,10 +236,10 @@ Without TeamCity service control, the API can use direct PowerShell remoting whe
 
 Pushes to `main` build and publish `pulseboard:latest` and a commit-tagged image to Docker Hub. To receive a Discord notification after a successful publish, create an incoming webhook for the destination channel and save its URL as the `DISCORD_WEBHOOK_URL` GitHub Actions repository secret. The existing `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets are still required for publishing.
 
-For repeat deployments on the Linux server, copy [scripts/deploy-pulseboard.sh](scripts/deploy-pulseboard.sh) into `/opt/pulseboard` alongside `docker-compose.yml` and `.env`, then make it executable:
+For repeat deployments on the Linux server, copy [scripts/deploy-pulseboard.sh](scripts/deploy-pulseboard.sh) into `/home/sus/apps/pulseboard` alongside `docker-compose.yml` and `.env`, then make it executable:
 
 ```bash
-cd /opt/pulseboard
+cd /home/sus/apps/pulseboard
 chmod 750 deploy-pulseboard.sh
 ./deploy-pulseboard.sh
 ```
@@ -250,7 +250,7 @@ Run it after the Docker workflow finishes whenever `main` changes. With no argum
 ./deploy-pulseboard.sh fd78d51abddc2c83d4378278829eb20ebaa2568c
 ```
 
-The script validates the Compose configuration, pulls the selected image, recreates the service without removing its persistent volume, and waits up to three minutes for the container health check. Set `PULSEBOARD_DIR` if the Compose project is stored somewhere other than `/opt/pulseboard`, or `DEPLOY_TIMEOUT_SECONDS` to change the health-check wait from 10 to 600 seconds. `PULSEBOARD_IMAGE` can override the default `gpsushil/pulseboard` repository.
+The script validates the Compose configuration, pulls the selected image, recreates the service without removing its persistent volume, and waits up to three minutes for the container health check. Set `PULSEBOARD_DIR` if the Compose project is stored somewhere other than `/home/sus/apps/pulseboard`, or `DEPLOY_TIMEOUT_SECONDS` to change the health-check wait from 10 to 600 seconds. `PULSEBOARD_IMAGE` can override the default `gpsushil/pulseboard` repository.
 
 ```powershell
 docker compose up --build -d
