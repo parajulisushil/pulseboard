@@ -47,6 +47,9 @@ type ApprovalFilter = 'ready' | 'drafts' | 'all'
 
 const mergeRequestKey = (mr: MergeRequest) => `${mr.projectId}:${mr.iid}`
 const isDraft = (mr: MergeRequest) => /^Draft\b/.test(mr.reason || '')
+const refreshTimeLabel = (value?: string) => value
+  ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  : 'Not checked'
 
 export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNotice }: Props) {
   const [data, setData] = useState<ApprovalList>()
@@ -138,7 +141,7 @@ export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNoti
           <h2 id="gitlab-approvals-heading">GitLab approvals {data?.projects && data.status !== 'unknown' && !error && <span className="approval-count">{visibleMergeRequests.length}{data.status === 'partial' ? '+' : ''}</span>}</h2>
           <p>Code Freeze requests awaiting your additional approval after normal approval is complete.</p>
         </div>
-        <button type="button" className="refresh-button" disabled={loading} onClick={() => void refresh(true)}>{loading ? 'Checking approvals...' : 'Refresh approvals'}</button>
+        <button type="button" className="refresh-button" disabled={loading} onClick={() => void refresh(true)}><span>↻</span> Refresh approvals <small>{loading ? 'checking...' : refreshTimeLabel(data?.checkedAt)}</small></button>
       </div>
       <div className="approval-panel" aria-busy={loading}>
         {data?.projects && !!data.mergeRequests.length && <div className="filter-tabs" role="group" aria-label="Filter merge requests">

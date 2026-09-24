@@ -37,6 +37,9 @@ type ResetResult = {
 }
 
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleString() : 'Unavailable'
+const refreshTimeLabel = (value?: string) => value
+  ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  : 'Not checked'
 
 function expiryLabel(user: AdUser) {
   if (user.expiryStatus === 'never') return 'Never expires'
@@ -151,7 +154,7 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
     <section id="ad-passwords" className="ad-passwords" aria-labelledby="ad-heading">
       <div className="page-heading">
         <div><p className="eyebrow">Active Directory</p><h1 id="ad-heading">AD passwords</h1><p className="subheading">Check password expiry and reset a selected user’s password.</p></div>
-        <button type="button" className="refresh-button" disabled={loading || pending || (criteria.view === 'search' && !criteria.query)} onClick={() => void refresh(true)}>{loading ? 'Checking AD...' : 'Refresh users'}</button>
+        <button type="button" className="refresh-button" disabled={loading || pending || (criteria.view === 'search' && !criteria.query)} onClick={() => void refresh(true)}><span>↻</span> Refresh users <small>{loading ? 'checking...' : refreshTimeLabel(data?.checkedAt)}</small></button>
       </div>
 
       <div className="ad-panel">
