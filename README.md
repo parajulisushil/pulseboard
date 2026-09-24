@@ -234,6 +234,8 @@ Without TeamCity service control, the API can use direct PowerShell remoting whe
 
 ## Production with Docker
 
+Pushes to `main` build and publish `pulseboard:latest` and a commit-tagged image to Docker Hub. To receive a Discord notification after a successful publish, create an incoming webhook for the destination channel and save its URL as the `DISCORD_WEBHOOK_URL` GitHub Actions repository secret. The existing `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets are still required for publishing.
+
 ```powershell
 docker compose up --build -d
 docker compose ps

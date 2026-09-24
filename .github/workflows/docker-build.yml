@@ -23,6 +23,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push Docker image
+        id: docker_push
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -31,3 +32,45 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/pulseboard:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/pulseboard:${{ github.sha }}
+
+      - name: Notify Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/pulseboard
+          IMAGE_DIGEST: ${{ steps.docker_push.outputs.digest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        shell: bash
+        run: |
+          if [[ -z "$DISCORD_WEBHOOK_URL" ]]; then
+            echo "::warning::DISCORD_WEBHOOK_URL is not configured; skipping Discord notification."
+            exit 0
+          fi
+
+          payload=$(jq -n \
+            --arg image "$DOCKER_IMAGE" \
+            --arg sha "$GITHUB_SHA" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg run_url "$RUN_URL" \
+            --arg commit_url "$COMMIT_URL" \
+            '{
+              username: "Pulseboard CI",
+              allowed_mentions: { parse: [] },
+              embeds: [{
+                title: "Docker image published",
+                url: $run_url,
+                description: ("**" + $image + "** was pushed to Docker Hub."),
+                color: 5763719,
+                fields: [
+                  { name: "Tags", value: ("`latest`\n`" + $sha + "`"), inline: true },
+                  { name: "Commit", value: ("[View `" + $sha[0:7] + "`](" + $commit_url + ")"), inline: true },
+                  { name: "Digest", value: ("`" + $digest + "`") }
+                ]
+              }]
+            }')
+
+          curl --fail-with-body --silent --show-error \
+            --retry 2 --max-time 15 \
+            -H 'Content-Type: application/json' \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK_URL"
