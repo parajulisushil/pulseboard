@@ -186,6 +186,23 @@ Set `AI_PROVIDER=openai` with `OPENAI_API_KEY`, or `AI_PROVIDER=groq` with `GROQ
 
 The list refreshes automatically and after approval. Failed or incomplete checks are shown explicitly, rather than being presented as an empty queue. Approval actions use the existing dashboard authentication and request verification header, reject concurrent duplicate actions, and produce structured audit logs. Approval-rule inspection requires GitLab Premium or Ultimate; see the [GitLab approval API](https://docs.gitlab.com/api/merge_request_approvals/).
 
+The approvals page also refreshes when you return to the tab or app on your phone. To receive Discord alerts even while Pulseboard is closed, configure the following in the API's `.env` and restart it:
+
+```dotenv
+CODE_FREEZE_APPLIED=true
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your-id/your-token
+PULSEBOARD_PUBLIC_URL=https://pulseboard.example.com
+GITLAB_APPROVAL_POLL_SECONDS=60
+# Optional: mention your Discord account to request a personal notification.
+DISCORD_APPROVAL_USER_ID=
+```
+
+`CODE_FREEZE_APPLIED` enables background alerts; it does not create or change GitLab approval rules. Set it to `false` and restart when the freeze ends. Manual approvals and page refreshes remain available. Use a Pulseboard origin reachable from your phone, including VPN access if required. Discord alerts link to `/approvals#mr-projectId-iid`, where the matching row is highlighted. The existing sign-in and approval confirmation still apply; opening a link never approves anything.
+
+The API checks immediately on startup and then waits the configured interval (10–3600 seconds, default 60) after each check. The first check alerts for existing ready requests too. Drafts and requests still being processed wait until ready. Each account/project/MR/commit is notified once while pending; new commits or requests that leave and later return to the queue can alert again. Incomplete GitLab checks preserve notification history, and failed Discord deliveries retry on the next check. Checks skip AI reviews. Delivery uses Discord's [webhook API](https://docs.discord.com/developers/resources/webhook#execute-webhook) with confirmation enabled and mentions restricted to the optional configured account. Phone push delivery also depends on your Discord notification settings.
+
+Notification history is stored at `GITLAB_APPROVAL_NOTIFICATION_PATH` (default `data/approval-notifications.json`), inside the existing persistent Docker data volume. Run one API instance against this file. A crash after Discord accepts a message but before history is saved can cause a duplicate. Delivery failures are recorded as `approval_notification_failed` in API logs. The runtime webhook must be configured separately from the GitHub Actions secret used for image publish notifications.
+
 ## Active Directory passwords
 
 Open **AD passwords** in the navigation for these actions:

@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { approveGitLabMergeRequest, getGitLabApprovalSummary, GitLabApprovalError, listGitLabApprovals, readApprovalRequest } from './gitlab-approvals.mjs'
+import { approvalNotificationSettings, createApprovalNotifier } from './approval-notifications.mjs'
 import { adPasswords, AdPasswordError, readAdResetRequest } from './ad-passwords.mjs'
 import { createDeploymentScheduler, DeploymentScheduleError, readScheduleRequest } from './deployment-schedules.mjs'
 import { createScheduledJobManager, readScheduledJobRequest, ScheduledJobError } from './scheduled-jobs.mjs'
@@ -33,6 +34,11 @@ const infrastructureActionLocks = new Map()
 let shuttingDown = false
 
 const infrastructureMonitor = createInfrastructureMonitor({ inventoryPath: infrastructureInventoryPath })
+const approvalNotifier = createApprovalNotifier({
+  filePath: path.resolve(projectRoot, process.env.GITLAB_APPROVAL_NOTIFICATION_PATH || 'data/approval-notifications.json'),
+  listApprovals: listGitLabApprovals,
+  audit: (message, details) => log(message.endsWith('_failed') ? 'warn' : 'info', message, details),
+})
 
 const deploymentScheduler = createDeploymentScheduler({
   filePath: () => path.resolve(projectRoot, process.env.DEPLOYMENT_SCHEDULE_PATH || 'data/deployment-schedules.json'),
@@ -1630,9 +1636,11 @@ api.on('clientError', (error, socket) => {
 
 function startServer() {
   validateRuntimeConfig()
+  approvalNotificationSettings()
   return api.listen(port, host, () => {
     deploymentScheduler.start()
     scheduledJobManager.start()
+    approvalNotifier.start()
     log('info', 'server_started', { host, port, nodeEnv: process.env.NODE_ENV || 'development', authMode: authenticationMode() })
   })
 }
@@ -1642,6 +1650,7 @@ function shutdown(signal) {
   shuttingDown = true
   deploymentScheduler.stop()
   scheduledJobManager.stop()
+  approvalNotifier.stop()
   log('info', 'server_stopping', { signal })
   api.close((error) => {
     if (error) log('error', 'server_shutdown_failed', { error: error.message })

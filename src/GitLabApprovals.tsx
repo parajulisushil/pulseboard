@@ -30,6 +30,7 @@ type MergeRequest = {
   aiReview: AIReview
 }
 type ApprovalList = {
+  codeFreezeApplied?: boolean
   status: 'available' | 'partial' | 'unknown'
   user?: Approver
   projects?: string[]
@@ -89,12 +90,24 @@ export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNoti
   useEffect(() => {
     const initialRefresh = window.setTimeout(() => void refresh(true), 0)
     const timer = window.setInterval(() => void refresh(), autoRefreshSeconds * 1000)
+    const onReturn = () => { if (document.visibilityState === 'visible') void refresh() }
+    window.addEventListener('focus', onReturn)
+    document.addEventListener('visibilitychange', onReturn)
     return () => {
       window.clearTimeout(initialRefresh)
       window.clearInterval(timer)
+      window.removeEventListener('focus', onReturn)
+      document.removeEventListener('visibilitychange', onReturn)
       cancelRefresh()
     }
   }, [autoRefreshSeconds, refreshKey, refresh, cancelRefresh])
+
+  const followedLink = useRef(false)
+  useEffect(() => {
+    if (followedLink.current || !data) return
+    const target = document.getElementById(window.location.hash.slice(1))
+    if (target) { target.scrollIntoView({ block: 'center' }); followedLink.current = true }
+  }, [data])
 
   const approve = async (mr: MergeRequest) => {
     const key = mergeRequestKey(mr)
@@ -140,6 +153,7 @@ export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNoti
         <div>
           <h2 id="gitlab-approvals-heading">GitLab approvals {data?.projects && data.status !== 'unknown' && !error && <span className="approval-count">{visibleMergeRequests.length}{data.status === 'partial' ? '+' : ''}</span>}</h2>
           <p>Code Freeze requests awaiting your additional approval after normal approval is complete.</p>
+          <p>Auto-refresh every {autoRefreshSeconds}s · Code Freeze alerts {data ? (data.codeFreezeApplied ? 'enabled' : 'disabled') : 'checking...'}</p>
         </div>
         <button type="button" className="refresh-button" disabled={loading} onClick={() => void refresh(true)}><span>↻</span> Refresh approvals <small>{loading ? 'checking...' : refreshTimeLabel(data?.checkedAt)}</small></button>
       </div>
@@ -157,7 +171,7 @@ export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNoti
         {data?.projects && data.status === 'available' && !data.mergeRequests.length && !error && <p className="approval-empty positive" role="status">No Code Freeze requests are ready for your additional approval.</p>}
         {data?.projects && !!data.mergeRequests.length && !visibleMergeRequests.length && !error && <p className="approval-empty" role="status">{filter === 'drafts' ? 'No Draft MRs are awaiting Code Freeze approval.' : 'No merge requests match this filter.'}</p>}
         {data?.projects && !!visibleMergeRequests.length && <ul className="approval-list">{visibleMergeRequests.map((mr) => (
-          <li className="approval-row" key={mergeRequestKey(mr)}>
+          <li className="approval-row" id={`mr-${mr.projectId}-${mr.iid}`} key={mergeRequestKey(mr)}>
             <div className="approval-copy">
               <a className="approval-title" href={mr.webUrl} target="_blank" rel="noopener noreferrer"><span>!{mr.iid}</span> {mr.title} ↗</a>
               <p className="approval-meta">{mr.projectName} · {mr.author} · <span>{mr.sourceBranch} → {mr.targetBranch}</span>{mr.sha && <> · <code>{mr.sha.slice(0, 8)}</code></>}</p>

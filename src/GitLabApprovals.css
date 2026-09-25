@@ -6,6 +6,7 @@
 .approval-list{list-style:none;padding:0;margin:0}
 .approval-row{display:flex;align-items:center;gap:20px;padding:18px}
 .approval-row+.approval-row{border-top:1px solid var(--line)}
+.approval-row:target{background:rgba(100,160,230,.1);box-shadow:inset 3px 0 var(--blue);scroll-margin-top:24px}
 .approval-copy{flex:1;min-width:0;overflow-wrap:anywhere}
 .approval-title{color:var(--ink);font-size:13px;font-weight:600;line-height:1.6;text-decoration:none}
 .approval-title span{color:var(--blue);margin-right:5px}

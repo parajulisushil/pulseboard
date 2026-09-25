@@ -220,6 +220,7 @@ export async function listGitLabApprovals({ includeAiReview = true } = {}) {
   return {
     status: warnings.length ? (mergeRequests.length ? 'partial' : 'unknown') : 'available',
     user, projects: config?.projects ?? [], targetBranches: config?.targetBranches ?? [],
+    codeFreezeApplied: value('CODE_FREEZE_APPLIED')?.toLowerCase() === 'true',
     mergeRequests, warnings, checkedAt: new Date().toISOString(),
   }
 }
