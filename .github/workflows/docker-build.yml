@@ -53,6 +53,7 @@ jobs:
             --arg digest "$IMAGE_DIGEST" \
             --arg run_url "$RUN_URL" \
             --arg commit_url "$COMMIT_URL" \
+            --arg commit_message "$(git log -1 --format=%B "$GITHUB_SHA")" \
             '{
               username: "Pulseboard CI",
               allowed_mentions: { parse: [] },
@@ -64,6 +65,7 @@ jobs:
                 fields: [
                   { name: "Tags", value: ("`latest`\n`" + $sha + "`"), inline: true },
                   { name: "Commit", value: ("[View `" + $sha[0:7] + "`](" + $commit_url + ")"), inline: true },
+                  { name: "Commit message", value: ($commit_message | if length == 0 then "(No commit message)" elif length > 1024 then .[0:1021] + "..." else . end) },
                   { name: "Digest", value: ("`" + $digest + "`") }
                 ]
               }]
