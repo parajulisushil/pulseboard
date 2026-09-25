@@ -269,6 +269,14 @@ Run it after the Docker workflow finishes whenever `main` changes. With no argum
 
 The script validates the Compose configuration, pulls the selected image, recreates the service without removing its persistent volume, and waits up to three minutes for the container health check. Set `PULSEBOARD_DIR` if the Compose project is stored somewhere other than `/home/sus/apps/pulseboard`, or `DEPLOY_TIMEOUT_SECONDS` to change the health-check wait from 10 to 600 seconds. `PULSEBOARD_IMAGE` can override the default `gpsushil/pulseboard` repository.
 
+If the pull fails, the script stops before changing the running service and prints DNS troubleshooting steps. To explicitly repair DNS, find your active Ethernet/Wi-Fi profile with `nmcli -f NAME,DEVICE,TYPE connection show --active`, then run:
+
+```bash
+./deploy-pulseboard.sh --repair-dns "Wired connection 1"
+```
+
+Replace the example name with your connection's NAME. The flag tests public DNS, persistently sets that profile's DNS to `1.1.1.1` and `8.8.8.8`, ignores DHCP DNS, and reapplies the device settings. If Tailscale resolvers are configured in `/etc/resolv.conf`, it also disables Tailscale-managed DNS on this host; Tailscale stays connected, but the host stops using MagicDNS/private DNS. The flag requires sudo/root, `nmcli`, `nslookup`, and `timeout`. Omit it for normal deployments, which do not change network settings. Use `./deploy-pulseboard.sh --help` to see usage.
+
 ```powershell
 docker compose up --build -d
 docker compose ps

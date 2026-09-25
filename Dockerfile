@@ -32,18 +32,7 @@ RUN setcap -r /usr/bin/ping \
 	&& test -z "$(getcap /usr/bin/ping)"
 COPY --chown=node:node --from=build /app/dist ./dist
 COPY --chown=node:node --from=build /app/config ./config
-COPY --chown=node:node --from=build /app/server/index.mjs ./server/index.mjs
-COPY --chown=node:node --from=build /app/server/gitlab-approvals.mjs ./server/gitlab-approvals.mjs
-COPY --chown=node:node --from=build /app/server/ai-code-review.mjs ./server/ai-code-review.mjs
-COPY --chown=node:node --from=build /app/server/ai-error-summary.mjs ./server/ai-error-summary.mjs
-COPY --chown=node:node --from=build /app/server/ad-passwords.mjs ./server/ad-passwords.mjs
-COPY --chown=node:node --from=build /app/server/deployment-schedules.mjs ./server/deployment-schedules.mjs
-COPY --chown=node:node --from=build /app/server/deployment-verification.mjs ./server/deployment-verification.mjs
-COPY --chown=node:node --from=build /app/server/sql-errors.mjs ./server/sql-errors.mjs
-COPY --chown=node:node --from=build /app/server/check-sql-error.mjs ./server/check-sql-error.mjs
-COPY --chown=node:node --from=build /app/server/infrastructure-status.mjs ./server/infrastructure-status.mjs
-COPY --chown=node:node --from=build /app/server/ec2-control.mjs ./server/ec2-control.mjs
-COPY --chown=node:node --from=build /app/server/scheduled-jobs.mjs ./server/scheduled-jobs.mjs
+COPY --chown=node:node --from=build /app/server ./server
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 EXPOSE 3001

@@ -1,1 +1,1 @@
-- Schedule Deploy is not checking the same branch as it's deployed in the test machine
+add a page to see/update .env variables. Also we restart the app from same UI?
