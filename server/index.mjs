@@ -1,4 +1,4 @@
-import 'dotenv/config'
+import { envFilePath, launchEnvironment } from './load-env.mjs'
 import { execFile } from 'node:child_process'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { createServer } from 'node:http'
@@ -13,6 +13,7 @@ import { createScheduledJobManager, readScheduledJobRequest, ScheduledJobError }
 import { readRecentSqlError, sqlErrorChecksEnabled } from './sql-errors.mjs'
 import { createInfrastructureMonitor, pingHost, readInfrastructureInventory } from './infrastructure-status.mjs'
 import { controlEc2Instance, ec2ControlEnabled, validateEc2ControlConfig } from './ec2-control.mjs'
+import { checkEnvironment, createEnvironmentStore, EnvironmentError, readEnvironmentRequest } from './environment.mjs'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.join(root, '..')
@@ -32,6 +33,10 @@ const componentBuildActionLocks = new Map()
 const teamCityDependencyCache = new Map()
 const infrastructureActionLocks = new Map()
 let shuttingDown = false
+const instanceId = randomUUID()
+const environmentStore = createEnvironmentStore(envFilePath, (content) => checkEnvironment(content, launchEnvironment))
+const startupEnvironment = await environmentStore.read()
+const restartSupported = Boolean(process.send && !process.argv.includes('--check-config'))
 
 const infrastructureMonitor = createInfrastructureMonitor({ inventoryPath: infrastructureInventoryPath })
 const approvalNotifier = createApprovalNotifier({
@@ -1259,6 +1264,38 @@ const api = createServer(async (request, response) => {
       return send(response, 401, { error: 'Authentication required' }, { 'WWW-Authenticate': 'Basic realm="Pulseboard", charset="UTF-8"' })
     }
 
+    if (parts[0] === 'api' && parts[1] === 'environment') {
+      if (request.headers['x-pulseboard-request'] !== '1' || request.headers['sec-fetch-site'] === 'cross-site') {
+        return send(response, 403, { error: 'Missing request verification header or cross-site request' })
+      }
+      if (shuttingDown) return send(response, 503, { error: 'The app is restarting' })
+      if (request.method === 'GET' && parts.length === 3 && parts[2] === 'status') {
+        return send(response, 200, { instanceId })
+      }
+      if (request.method === 'GET' && parts.length === 2) {
+        const current = await environmentStore.read()
+        return send(response, 200, { ...current, restartSupported, restartRequired: current.revision !== startupEnvironment.revision })
+      }
+      if (request.method === 'PUT' && parts.length === 2) {
+        const saved = await environmentStore.save(await readEnvironmentRequest(request))
+        log('info', 'environment_saved', { requestId })
+        return send(response, 200, { ...saved, restartSupported, restartRequired: saved.revision !== startupEnvironment.revision })
+      }
+      if (request.method === 'POST' && parts.length === 3 && parts[2] === 'restart') {
+        if (!restartSupported) return send(response, 409, { error: 'Start Pulseboard with npm start or npm run api to enable UI restarts' })
+        const body = await readEnvironmentRequest(request)
+        await environmentStore.prepareRestart(body?.revision)
+        response.once('finish', () => {
+          process.send({ type: 'restart' }, (error) => {
+            if (error) return log('error', 'restart_failed', { requestId })
+            shutdown('UI restart', true)
+          })
+        })
+        return send(response, 202, { instanceId })
+      }
+      return send(response, 404, { error: 'Not found' })
+    }
+
     if (request.method === 'GET' && parts.length === 2 && parts[0] === 'api' && parts[1] === 'servers') {
       const inventory = await readInventory()
       const reachability = new Map(await Promise.all(inventory
@@ -1609,6 +1646,7 @@ const api = createServer(async (request, response) => {
     if (['GET', 'HEAD'].includes(request.method) && parts[0] !== 'api') return serveFrontend(request, response, requestUrl)
     return send(response, 404, { error: 'Not found' })
   } catch (error) {
+    if (error instanceof EnvironmentError) return send(response, error.status, { error: error.message })
     if (error instanceof DeploymentScheduleError) return send(response, error.status, { error: error.message })
     if (error instanceof ScheduledJobError) return send(response, error.status, { error: error.message })
     log('error', 'request_failed', { requestId, error: error instanceof Error ? error.message : String(error) })
@@ -1645,7 +1683,7 @@ function startServer() {
   })
 }
 
-function shutdown(signal) {
+function shutdown(signal, exitWhenClosed = false) {
   if (shuttingDown) return
   shuttingDown = true
   deploymentScheduler.stop()
@@ -1655,18 +1693,34 @@ function shutdown(signal) {
   api.close((error) => {
     if (error) log('error', 'server_shutdown_failed', { error: error.message })
     process.exitCode = error ? 1 : 0
+    if (exitWhenClosed) process.exit(process.exitCode)
   })
   setTimeout(() => {
     log('warn', 'server_shutdown_forced')
     api.closeAllConnections()
+    if (exitWhenClosed) process.exit(0)
   }, 10000).unref()
 }
 
 const isMainModule = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMainModule) {
-  startServer()
-  process.on('SIGINT', () => shutdown('SIGINT'))
-  process.on('SIGTERM', () => shutdown('SIGTERM'))
+  if (process.argv.includes('--check-config')) {
+    try {
+      validateRuntimeConfig()
+      approvalNotificationSettings()
+      process.send?.({ valid: true })
+    } catch (error) {
+      process.send?.({ valid: false, error: error.message })
+      process.exitCode = 1
+    }
+    process.disconnect?.()
+  } else {
+    startServer()
+    process.on('SIGINT', () => shutdown('SIGINT', true))
+    process.on('SIGTERM', () => shutdown('SIGTERM', true))
+    process.on('message', (message) => { if (message?.type === 'shutdown') shutdown('supervisor', true) })
+    process.on('disconnect', () => shutdown('supervisor disconnected', true))
+  }
 }
 
 export {

@@ -1,6 +1,6 @@
 # Pulseboard
 
-Pulseboard is an operations dashboard for checking daily test machines, engineering infrastructure availability, deployed Venio versions, Windows service state, and GitLab/TeamCity activity. The Node API serves the compiled React application, so production needs only one process and one port.
+Pulseboard is an operations dashboard for checking daily test machines, engineering infrastructure availability, deployed Venio versions, Windows service state, and GitLab/TeamCity activity. The Node API serves the compiled React application on one port, with a small supervisor that supports restarts from the dashboard.
 
 ## Local development
 
@@ -32,6 +32,12 @@ npm run check
 ## Runtime configuration
 
 Copy `.env.example` to `.env` and replace every placeholder used by your deployment. Restart the API after changing runtime settings; rebuilding the frontend is not required.
+
+Open **Environment** (`/environment`) to view and edit the project-root `.env`. Select **Show values & edit**, update the file, and select **Save changes**. Saves preserve comments and formatting, validate syntax and startup settings, and reject stale edits when another operator has changed the file. Values are hidden initially and responses are not cached; this page has the same operator authentication as the rest of the dashboard.
+
+Select **Restart app** after saving. The app shuts down and the supervisor starts a fresh worker that reloads `.env`; the page reconnects automatically. Running scheduled scripts are stopped during restart. Launch with `npm start`, `npm run api`, the Windows launcher, or the updated Docker image to enable this button. A server started directly with `node server/index.mjs` can edit settings but must be restarted manually. `.env` values take precedence over inherited process variables; removing an entry restores the inherited value or app default.
+
+Host, port, or credential changes may require opening the new address or signing in again. Docker port/image/bind settings take effect only after `docker compose up -d --force-recreate`; a UI restart only restarts the API worker. If a new configuration fails to start, inspect the server logs, correct `.env` on disk, and relaunch.
 
 | Setting | Required | Purpose |
 | --- | --- | --- |
@@ -283,6 +289,8 @@ docker compose ps
 ```
 
 Compose binds to `127.0.0.1` by default. Put an HTTPS reverse proxy or load balancer in front of it. If direct network exposure is intentional, set `PULSEBOARD_BIND_ADDRESS` explicitly and enforce firewall rules. Basic credentials must never travel over plain HTTP.
+
+Compose mounts the host `.env` at `/app/.env` so edits persist and are reloaded by UI restarts. The file must already exist and be readable and writable by the container's `node` user (UID 1000). On Linux, grant that user access without making secrets world-readable, for example `sudo setfacl -m u:1000:rw .env` on an ACL-enabled filesystem. Keep the file readable by the host deployment user as well. Existing deployments must install the updated Compose file and recreate the container once; the former `env_file` injection cannot reload settings from disk. Use dotenv quoting for values containing `#` or newlines. Host-side editors that replace the file's inode require recreating the container to refresh its bind mount.
 
 The runtime container:
 

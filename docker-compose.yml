@@ -3,14 +3,16 @@ services:
     image: "${PULSEBOARD_IMAGE:-gpsushil/pulseboard}:${IMAGE_TAG:-latest}"
     ports:
       - "${PULSEBOARD_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-3001}:${API_PORT:-3001}"
-    env_file:
-      - path: .env
-        format: raw
     dns:
       - 172.31.71.219
     init: true
     read_only: true
     volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false
       - pulseboard_data:/app/data
       - ./scripts:/app/scripts:ro
     tmpfs:

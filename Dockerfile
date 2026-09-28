@@ -38,4 +38,4 @@ USER node
 EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget --no-verbose --tries=1 --spider http://127.0.0.1:3001/healthz || exit 1
 STOPSIGNAL SIGTERM
-CMD ["node", "server/index.mjs"]
+CMD ["node", "server/start.mjs"]

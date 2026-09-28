@@ -9,8 +9,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "api": "node server/index.mjs",
-    "start": "node server/index.mjs",
+    "api": "node server/start.mjs",
+    "start": "node server/start.mjs",
     "setup:browser": "playwright install --only-shell chromium",
     "check:sql": "node server/check-sql-error.mjs",
     "build": "tsc -b && vite build",

@@ -5,6 +5,7 @@ import GitLabApprovals from './GitLabApprovals'
 import AdPasswords from './AdPasswords'
 import DeploymentControls from './DeploymentControls'
 import ScheduledJobs from './ScheduledJobs'
+import EnvironmentSettings from './EnvironmentSettings'
 import './App.css'
 
 type Service = { name: string; serviceKey?: string; status: 'running' | 'stopped' | 'unknown' }
@@ -96,9 +97,9 @@ type ApprovalSummary = { status: 'available' | 'partial' | 'unknown'; pendingCou
 type AdPasswordSummary = { status: 'available' | 'partial'; expiredCount: number; expiringCount: number; mustChangeCount: number }
 type ScheduledJobSummaryItem = { status: 'scheduled' | 'running' | 'completed'; nextRunAt: string | null; lastStatus: 'success' | 'failed' | null }
 type ScheduledJobSummary = { jobs: ScheduledJobSummaryItem[]; timeZone: string }
-type Section = 'overview' | 'servers' | 'delivery' | 'infrastructure' | 'approvals' | 'ad' | 'jobs'
+type Section = 'overview' | 'servers' | 'delivery' | 'infrastructure' | 'approvals' | 'ad' | 'jobs' | 'environment'
 
-const sectionPaths: Record<Section, string> = { overview: '/', servers: '/test-machines', delivery: '/delivery-systems', infrastructure: '/infrastructure-status', approvals: '/approvals', ad: '/ad-passwords', jobs: '/scheduled-jobs' }
+const sectionPaths: Record<Section, string> = { overview: '/', servers: '/test-machines', delivery: '/delivery-systems', infrastructure: '/infrastructure-status', approvals: '/approvals', ad: '/ad-passwords', jobs: '/scheduled-jobs', environment: '/environment' }
 function sectionFromPath(pathname: string): Section {
   const path = pathname.replace(/\/+$/, '') || '/'
   if (path === '/servers' || path === '/test-machines') return 'servers'
@@ -107,6 +108,7 @@ function sectionFromPath(pathname: string): Section {
   if (path === '/approvals') return 'approvals'
   if (path === '/ad-passwords') return 'ad'
   if (path === '/scheduled-jobs') return 'jobs'
+  if (path === '/environment') return 'environment'
   return 'overview'
 }
 
@@ -150,6 +152,8 @@ function App() {
   const [servers, setServers] = useState<Server[]>([])
   const [activeSection, setActiveSection] = useState<Section>(() => sectionFromPath(window.location.pathname))
   const [adResetPending, setAdResetPending] = useState(false)
+  const [environmentDirty, setEnvironmentDirty] = useState(false)
+  const [environmentBusy, setEnvironmentBusy] = useState(false)
   const [loading, setLoading] = useState(true)
   const [apiHealthy, setApiHealthy] = useState(false)
   const [lastRefresh, setLastRefresh] = useState('Not checked')
@@ -350,6 +354,10 @@ function App() {
   useEffect(() => {
     const handleHistoryNavigation = () => {
       const nextSection = sectionFromPath(window.location.pathname)
+      if (nextSection !== 'environment' && (environmentBusy || (environmentDirty && !window.confirm('Discard unsaved .env changes?')))) {
+        window.history.pushState(null, '', sectionPaths.environment)
+        return
+      }
       if (adResetPending && nextSection !== 'ad') {
         window.history.pushState(null, '', sectionPaths.ad)
         return
@@ -360,7 +368,7 @@ function App() {
     }
     window.addEventListener('popstate', handleHistoryNavigation)
     return () => window.removeEventListener('popstate', handleHistoryNavigation)
-  }, [adResetPending])
+  }, [adResetPending, environmentDirty, environmentBusy])
 
   useEffect(() => {
     const title = activeSection === 'ad' ? 'AD passwords' : activeSection === 'jobs' ? 'Scheduled jobs' : activeSection === 'servers' ? 'Test machines' : activeSection === 'delivery' ? 'Delivery systems' : activeSection === 'infrastructure' ? 'Infrastructure status' : activeSection[0].toUpperCase() + activeSection.slice(1)
@@ -734,6 +742,7 @@ function App() {
           : scheduledJobs.length ? 'No future runs scheduled' : 'No automation configured'
 
   const navigateTo = (section: Section, target?: string) => {
+    if (section !== activeSection && (environmentBusy || (environmentDirty && !window.confirm('Discard unsaved .env changes?')))) return
     if (adResetPending) return
     const destination = `${sectionPaths[section]}${target ? `#${target}` : ''}`
     window.history.pushState(null, '', destination)
@@ -754,13 +763,14 @@ function App() {
           <button type="button" disabled={adResetPending} className={`nav-item ${activeSection === 'approvals' ? 'active' : ''}`} aria-label="GitLab approvals" onClick={() => navigateTo('approvals')}><span>✓</span>Approvals</button>
           <button type="button" disabled={adResetPending} className={`nav-item ${activeSection === 'jobs' ? 'active' : ''}`} aria-label="Scheduled jobs" onClick={() => navigateTo('jobs')}><span>◷</span>Scheduled jobs</button>
           <button type="button" className={`nav-item ${activeSection === 'ad' ? 'active' : ''}`} aria-label="AD passwords" onClick={() => navigateTo('ad')}><span>⚿</span>AD passwords</button>
+          <button type="button" disabled={adResetPending} className={`nav-item ${activeSection === 'environment' ? 'active' : ''}`} onClick={() => navigateTo('environment')}><span>⚙</span>Environment</button>
         </nav>
         <div className="sidebar-bottom"><div className="account-dot">OP</div><div><strong>Operations</strong><small>Protected workspace</small></div></div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
-          <div className="breadcrumb">Operations <span>/</span> <strong>{activeSection === 'ad' ? 'AD passwords' : activeSection === 'jobs' ? 'Scheduled jobs' : activeSection === 'servers' ? 'Test machines' : activeSection === 'delivery' ? 'Delivery systems' : activeSection === 'infrastructure' ? 'Infrastructure status' : activeSection === 'approvals' ? 'Approvals' : 'Overview'}</strong></div>
+          <div className="breadcrumb">Operations <span>/</span> <strong>{activeSection === 'environment' ? 'Environment' : activeSection === 'ad' ? 'AD passwords' : activeSection === 'jobs' ? 'Scheduled jobs' : activeSection === 'servers' ? 'Test machines' : activeSection === 'delivery' ? 'Delivery systems' : activeSection === 'infrastructure' ? 'Infrastructure status' : activeSection === 'approvals' ? 'Approvals' : 'Overview'}</strong></div>
           <div className="top-actions">
             <span className={`live-indicator ${apiHealthy ? '' : 'disconnected'}`}><i />{apiHealthy ? 'Live monitoring' : 'Connection unavailable'}</span>
             <div className="avatar" aria-hidden="true">OP</div>
@@ -770,6 +780,7 @@ function App() {
         <div className="content-wrap">
           {activeSection === 'ad' && <AdPasswords onResetPending={setAdResetPending} />}
           {activeSection === 'jobs' && <ScheduledJobs />}
+          {activeSection === 'environment' && <EnvironmentSettings onDirtyChange={setEnvironmentDirty} onBusyChange={setEnvironmentBusy} />}
           {activeSection === 'overview' && <>
           <section id="overview" className="page-heading">
             <div><p className="eyebrow">Operations workspace</p><h1>Workspace overview</h1><p className="subheading">A summary of server health, scheduled automation, release approvals, and account operations.</p></div>
