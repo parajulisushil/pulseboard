@@ -144,10 +144,11 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
     }
   }
 
-  const copyPassword = async () => {
+  const copyPassword = async (slackReply = false) => {
     if (!result) return
-    try { await navigator.clipboard.writeText(result.password); setCopyMessage('Password copied to the clipboard.') }
-    catch { setReveal(true); setCopyMessage('Copy is unavailable here. Select and copy the password below.') }
+    const text = slackReply ? `Your new password is\n${result.password}` : result.password
+    try { await navigator.clipboard.writeText(text); setCopyMessage(slackReply ? 'Slack reply copied to the clipboard.' : 'Password copied to the clipboard.') }
+    catch { setReveal(true); setCopyMessage(slackReply ? 'Copy is unavailable here. Type “Your new password is” on the first line, then copy the password below onto the next line.' : 'Copy is unavailable here. Select and copy the password below.') }
   }
 
   return (
@@ -174,7 +175,7 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
         <div className="ad-panel-heading"><h2>Password reset successful</h2><button type="button" className="refresh-button" onClick={() => { setResult(undefined); setReveal(false); setCopyMessage('') }}>Dismiss password</button></div>
         <p><strong>{result.user.displayName}</strong> · {result.user.accountName} · {dateLabel(result.resetAt)}</p>
         <label htmlFor="ad-result-password">{result.generated ? 'Generated password' : 'New password'}</label>
-        <div className="ad-input-row"><input id="ad-result-password" className="ad-secret" type={reveal ? 'text' : 'password'} value={result.password} readOnly autoComplete="off" spellCheck={false} onFocus={(event) => event.currentTarget.select()} /><button type="button" className="refresh-button" onClick={() => setReveal((value) => !value)}>{reveal ? 'Hide' : 'Show'}</button><button type="button" className="refresh-button" onClick={() => void copyPassword()}>Copy password</button></div>
+        <div className="ad-input-row"><input id="ad-result-password" className="ad-secret" type={reveal ? 'text' : 'password'} value={result.password} readOnly autoComplete="off" spellCheck={false} onFocus={(event) => event.currentTarget.select()} /><button type="button" className="refresh-button" onClick={() => setReveal((value) => !value)}>{reveal ? 'Hide' : 'Show'}</button><button type="button" className="refresh-button" onClick={() => void copyPassword()}>Copy password</button><button type="button" className="refresh-button" onClick={() => void copyPassword(true)}>Copy Slack reply</button></div>
         <p className="ad-muted">The password is shown and copied automatically. Copy it before dismissing or leaving this page. It is not saved by Pulseboard.</p>
         {copyMessage && <p role="status">{copyMessage}</p>}
         <p className="ad-muted">Change required at next sign-in: {result.forceChangeAtNextLogon ? 'Yes' : 'No change requirement was set'} · Account unlock: {result.accountUnlocked ? 'Confirmed' : 'Not performed or not confirmed'}</p>
