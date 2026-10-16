@@ -22,6 +22,7 @@ export function validateInfrastructureInventory(inventory) {
       if (!server.storage || !/^[A-Z]:$/i.test(server.storage.drive)) throw new Error(`${server.name} storage drive must be a drive letter`)
       requireText(server.storage.label, `${server.name} storage label`)
       requireText(server.storage.share, `${server.name} storage share`)
+      if (!/^\\\\[A-Za-z0-9][A-Za-z0-9.-]*\\[^\\/|\r\n]+$/.test(server.storage.share)) throw new Error(`${server.name} storage share must be a UNC share root`)
     }
     if (server.instanceId !== undefined && !/^i-[0-9a-f]{8,17}$/i.test(server.instanceId)) throw new Error(`${server.name} instanceId must be a valid EC2 instance ID`)
     if (server.awsRegion !== undefined && !/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(server.awsRegion)) throw new Error(`${server.name} awsRegion must be a valid AWS region`)

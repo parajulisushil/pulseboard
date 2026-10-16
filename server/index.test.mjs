@@ -19,6 +19,7 @@ import {
   parseTeamCityServiceStatuses,
   readInventory,
   scheduledJobManager,
+  serviceStatusTargets,
   summarizeTeamCityAgentStatus,
   teamCityBuildPayload,
   validateInventory,
@@ -228,6 +229,12 @@ test('parses disk markers and classifies free-space thresholds', () => {
     { name: 'D:', totalBytes: 1000, freeBytes: 150, freePercent: 15, status: 'warning' },
     { name: 'E:', totalBytes: 1000, freeBytes: 50, freePercent: 5, status: 'critical' },
   ])
+})
+
+test('storage status targets carry the actual SMB share and backing volume label', () => {
+  assert.deepEqual(serviceStatusTargets([{ name: 'FS02', remoteHost: 'fs02.ad.veniosystems.com', storageOnly: true, storage: { share: '\\\\fs02\\teamcity', drive: 'G:' } }]), [{
+    serverName: 'FS02', target: 'fs02.ad.veniosystems.com', storageOnly: true, storageShare: '\\\\fs02\\teamcity', storageDrive: 'G:',
+  }])
 })
 
 test('validates the configured inventory and rejects duplicate names', async () => {

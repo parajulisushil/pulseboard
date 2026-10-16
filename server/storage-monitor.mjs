@@ -63,7 +63,7 @@ export function createStorageMonitor({ inventory, checkVolumes, filePath, settin
         if (!volume) throw new Error('Capacity was not reported')
         storage = { ...server.storage, ...classifyStorage(volume.totalBytes, volume.freeBytes), checkedAt: now().toISOString() }
       } catch {
-        storage = { ...server.storage, status: 'unknown', checkedAt: now().toISOString(), reason: 'Disk capacity unavailable. Check the TeamCity status build, FS02 remoting permissions, and the configured drive.' }
+        storage = { ...server.storage, status: 'unknown', checkedAt: now().toISOString(), reason: 'Disk capacity unavailable. Check the TeamCity status build, SMB connectivity (TCP 445), and share permissions for the monitoring account.' }
       }
       next[server.name] = storage
     }))

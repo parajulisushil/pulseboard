@@ -14,13 +14,63 @@ $targets = if ($action -eq 'status' -and $inventory) {
   @([PSCustomObject]@{ serverName = $env:PULSEBOARD_SERVER_NAME; target = $target; serviceName = $serviceName; serviceKey = $serviceName })
 }
 
-# Open one remoting session per machine. If the machine cannot be reached,
+function Get-PulseboardShareSpace {
+  param([string]$Share, [PSCredential]$Credential)
+  if ($Share -notmatch '^\\\\[^\\/]+\\[^\\/]+$') { throw 'Storage requires a UNC share root, such as \\fs02\teamcity' }
+  if (-not ('PulseboardShareCapacity' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PulseboardShareCapacity {
+    [DllImport("kernel32.dll", EntryPoint = "GetDiskFreeSpaceExW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetDiskFreeSpaceEx(string directory, out ulong available, out ulong total, out ulong free);
+}
+'@
+  }
+  # A temporary PowerShell drive establishes SMB credentials without a persistent
+  # drive letter or a password in a command line. Never remove existing mappings.
+  $driveName = 'Pulseboard' + [Guid]::NewGuid().ToString('N')
+  $mapped = $false
+  try {
+    New-PSDrive -Name $driveName -PSProvider FileSystem -Root $Share -Credential $Credential -ErrorAction Stop | Out-Null
+    $mapped = $true
+    [uint64]$available = 0
+    [uint64]$total = 0
+    [uint64]$free = 0
+    if (-not [PulseboardShareCapacity]::GetDiskFreeSpaceEx(($Share + '\'), [ref]$available, [ref]$total, [ref]$free)) {
+      throw [System.ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    }
+    if ($total -eq 0 -or $available -gt $total) { throw 'SMB returned invalid storage capacity' }
+    # Match capacity available to the monitoring account, including SMB quotas.
+    [PSCustomObject]@{ TotalBytes = $total; FreeBytes = $available }
+  } finally {
+    if ($mapped) { Remove-PSDrive -Name $driveName -Force -ErrorAction SilentlyContinue }
+  }
+}
+
+# Storage-only checks run locally on the Windows agent over SMB, without WinRM.
+# Open one remoting session per machine for service checks. If it cannot be reached,
 # emit Unknown for all of its services without waiting on another session for
 # each service.
 foreach ($serverGroup in ($targets | Group-Object -Property serverName)) {
   $items = @($serverGroup.Group)
   $serverName = [string]$items[0].serverName
   $target = [string]$items[0].target
+  if ($action -eq 'status') {
+    foreach ($storageItem in @($items | Where-Object { $_.storageOnly })) {
+      try {
+        if ([string]$storageItem.storageDrive -notmatch '^[A-Za-z]:$') { throw 'Storage drive must be a drive letter' }
+        Write-Host "Querying storage over SMB: $($storageItem.storageShare)"
+        $capacity = Get-PulseboardShareSpace -Share $storageItem.storageShare -Credential $credential
+        Write-Host "PULSEBOARD_DISK_STATUS|$serverName|$($storageItem.storageDrive)|$($capacity.TotalBytes)|$($capacity.FreeBytes)"
+      } catch {
+        Write-Warning "Unable to query SMB storage for ${serverName}: $($_.Exception.Message). Check TCP 445 and share permissions for SERVICE_USERNAME."
+      }
+    }
+    $items = @($items | Where-Object { -not $_.storageOnly })
+    if ($items.Count -eq 0) { continue }
+  }
   # Passing an object array directly through -ArgumentList can add a nested
   # array layer during remoting. Serialize it so every service remains a
   # distinct object on the remote machine.

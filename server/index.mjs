@@ -549,7 +549,10 @@ function serverStatusCacheKey(serverName) {
 }
 
 function serviceStatusTargets(inventory) {
-  return inventory.flatMap((server) => server.storageOnly ? [{ serverName: server.name, target: server.remoteHost || server.name, storageOnly: true }] : (server.services || []).map((service) => ({
+  return inventory.flatMap((server) => server.storageOnly ? [{
+    serverName: server.name, target: server.remoteHost || server.name, storageOnly: true,
+    storageShare: server.storage.share, storageDrive: server.storage.drive,
+  }] : (server.services || []).map((service) => ({
     serverName: server.name,
     target: server.remoteHost || server.name,
     serviceName: service.name,
@@ -1743,6 +1746,7 @@ export {
   api,
   deploymentScheduler,
   scheduledJobManager,
+  serviceStatusTargets,
   getTeamCityBuildProgress,
   compareDeploymentBuilds,
   currentTeamCityBranch,

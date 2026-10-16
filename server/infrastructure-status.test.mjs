@@ -46,4 +46,5 @@ test('validates infrastructure storage targets', () => {
   assert.equal(validateInfrastructureInventory([fs02])[0], fs02)
   assert.throws(() => validateInfrastructureInventory([{ ...fs02, remoteHost: 'host; command' }]), /hostname/)
   assert.throws(() => validateInfrastructureInventory([{ ...fs02, storage: { ...fs02.storage, drive: 'G:\\teamcity' } }]), /drive letter/)
+  assert.throws(() => validateInfrastructureInventory([{ ...fs02, storage: { ...fs02.storage, share: 'C:\\teamcity' } }]), /UNC share root/)
 })
