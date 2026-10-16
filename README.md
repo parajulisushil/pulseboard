@@ -108,6 +108,14 @@ Machine inventory belongs in `config/servers.json`. It is deliberately outside `
 
 ### Engineering infrastructure inventory
 
+FS02 includes **TeamCity storage** for `\\fs02\teamcity`, backed by **G:** on `fs02.ad.veniosystems.com`. Its Infrastructure card shows capacity, percentage free, health, and the last check time. The Overview disk alert count includes this drive. Background checks run on API startup and every five minutes after completion, independently of an open browser and of ICMP reachability. The API returns the latest snapshot immediately; unavailable or stale capacity is shown as unknown.
+
+Storage checks use the existing `TEAMCITY_SERVICE_BUILD_TYPE_ID` Windows runner. Update that build's PowerShell step to the current `server/teamcity-service-control.ps1`, including its `storageOnly` support. The runner's secure `env.SERVICE_USERNAME` / `env.SERVICE_PASSWORD` account must be able to use PowerShell remoting to FS02 and read its volumes. The API host does not need an SMB mount. Inventory fields `remoteHost` and `storage: { "drive": "G:", "label": "TeamCity storage", "share": "\\\\fs02\\teamcity" }` configure the target. The share is a display label; capacity comes from G: itself.
+
+For Discord warning, critical, and recovery notifications, set `STORAGE_DISCORD_ALERTS_ENABLED=true`, configure the existing `DISCORD_WEBHOOK_URL` and `PULSEBOARD_PUBLIC_URL`, and restart the app. Optional `DISCORD_APPROVAL_USER_ID` mentions the same configured account. These alerts work independently of Code Freeze. Storage is warning below `DISK_WARNING_PERCENT_FREE` (default 20) and critical below `DISK_CRITICAL_PERCENT_FREE` (default 10). The first low reading alerts; unchanged states do not repeat. Failed deliveries retry on the next check, unknown readings preserve notification history, and recovery sends once. History persists in `data/storage-notifications.json` on the existing data volume.
+
+**Copy Slack reply** on the AD passwords page copies the password as code, with rich HTML clipboard content and a backtick-formatted text fallback. **Copy password** continues to copy the raw password.
+
 The separate **Infrastructure status** page reads `config/infrastructure-servers.json`. Each entry has a display name, an IP address or hostname, and an explicit panel:
 
 ```json

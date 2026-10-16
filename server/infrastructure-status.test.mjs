@@ -40,3 +40,10 @@ test('uses platform-specific one-packet ping arguments', () => {
   assert.deepEqual(pingArguments('win32'), ['-n', '1', '-w', '1000'])
   assert.deepEqual(pingArguments('linux'), ['-c', '1', '-W', '1'])
 })
+
+test('validates infrastructure storage targets', () => {
+  const fs02 = { name: 'FS02', ip: '172.31.43.227', panel: 'Other Servers', remoteHost: 'fs02.ad.veniosystems.com', storage: { drive: 'G:', label: 'TeamCity storage', share: '\\\\fs02\\teamcity' } }
+  assert.equal(validateInfrastructureInventory([fs02])[0], fs02)
+  assert.throws(() => validateInfrastructureInventory([{ ...fs02, remoteHost: 'host; command' }]), /hostname/)
+  assert.throws(() => validateInfrastructureInventory([{ ...fs02, storage: { ...fs02.storage, drive: 'G:\\teamcity' } }]), /drive letter/)
+})

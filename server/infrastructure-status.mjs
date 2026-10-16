@@ -17,6 +17,12 @@ export function validateInfrastructureInventory(inventory) {
     requireText(server.name, `Infrastructure server ${index} name`)
     requireText(server.ip, `${server.name} ip`)
     requireText(server.panel, `${server.name} panel`)
+    if (server.remoteHost !== undefined && (typeof server.remoteHost !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/.test(server.remoteHost))) throw new Error(`${server.name} remoteHost must be a hostname`)
+    if (server.storage !== undefined) {
+      if (!server.storage || !/^[A-Z]:$/i.test(server.storage.drive)) throw new Error(`${server.name} storage drive must be a drive letter`)
+      requireText(server.storage.label, `${server.name} storage label`)
+      requireText(server.storage.share, `${server.name} storage share`)
+    }
     if (server.instanceId !== undefined && !/^i-[0-9a-f]{8,17}$/i.test(server.instanceId)) throw new Error(`${server.name} instanceId must be a valid EC2 instance ID`)
     if (server.awsRegion !== undefined && !/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(server.awsRegion)) throw new Error(`${server.name} awsRegion must be a valid AWS region`)
     if (server.ec2Control !== undefined && typeof server.ec2Control !== 'boolean') throw new Error(`${server.name} ec2Control must be a boolean`)

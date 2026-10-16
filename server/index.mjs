@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { approveGitLabMergeRequest, getGitLabApprovalSummary, GitLabApprovalError, listGitLabApprovals, readApprovalRequest } from './gitlab-approvals.mjs'
 import { approvalNotificationSettings, createApprovalNotifier } from './approval-notifications.mjs'
+import { createStorageMonitor, storageNotificationSettings } from './storage-monitor.mjs'
 import { adPasswords, AdPasswordError, readAdResetRequest } from './ad-passwords.mjs'
 import { createDeploymentScheduler, DeploymentScheduleError, readScheduleRequest } from './deployment-schedules.mjs'
 import { createScheduledJobManager, readScheduledJobRequest, ScheduledJobError } from './scheduled-jobs.mjs'
@@ -39,6 +40,15 @@ const startupEnvironment = await environmentStore.read()
 const restartSupported = Boolean(process.send && !process.argv.includes('--check-config'))
 
 const infrastructureMonitor = createInfrastructureMonitor({ inventoryPath: infrastructureInventoryPath })
+const storageMonitor = createStorageMonitor({
+  inventory: () => readInfrastructureInventory(infrastructureInventoryPath),
+  checkVolumes: async (server) => {
+    const result = await getTeamCityMachineStatus([{ ...server, storageOnly: true }], { serverName: server.name, force: true })
+    return result?.disks.get(serverStatusCacheKey(server.name)) || []
+  },
+  filePath: path.resolve(projectRoot, 'data/storage-notifications.json'),
+  audit: (event, details) => log(event.endsWith('_failed') ? 'warn' : 'info', event, details),
+})
 const approvalNotifier = createApprovalNotifier({
   filePath: path.resolve(projectRoot, process.env.GITLAB_APPROVAL_NOTIFICATION_PATH || 'data/approval-notifications.json'),
   listApprovals: listGitLabApprovals,
@@ -539,7 +549,7 @@ function serverStatusCacheKey(serverName) {
 }
 
 function serviceStatusTargets(inventory) {
-  return inventory.flatMap((server) => (server.services || []).map((service) => ({
+  return inventory.flatMap((server) => server.storageOnly ? [{ serverName: server.name, target: server.remoteHost || server.name, storageOnly: true }] : (server.services || []).map((service) => ({
     serverName: server.name,
     target: server.remoteHost || server.name,
     serviceName: service.name,
@@ -745,17 +755,17 @@ async function getTeamCityMachineStatus(inventory, { force = false, serverName }
     let disks = parseTeamCityDiskStatuses(buildLog)
     // TeamCity can report a build as finished a moment before its console log is
     // available through REST. Give the log endpoint a short bounded retry.
-    for (let attempt = 0; attempt < 2 && statuses.size === 0; attempt += 1) {
+    for (let attempt = 0; attempt < 2 && statuses.size === 0 && disks.size === 0; attempt += 1) {
       await delay(250)
       buildLog = await getTeamCityBuildLog(finishedBuild.id)
       statuses = parseTeamCityServiceStatuses(buildLog)
       disks = parseTeamCityDiskStatuses(buildLog)
     }
-    if (statuses.size === 0) {
+    if (statuses.size === 0 && disks.size === 0) {
       console.error('[TeamCity] Service status build contained no Pulseboard status markers', { buildId: finishedBuild.id })
       return emptyTeamCityMachineStatus()
     }
-    const targetKeys = new Set(targets.map((target) => serviceStatusKey(target.serverName, target.serviceName)))
+    const targetKeys = new Set(targets.filter((target) => !target.storageOnly).map((target) => serviceStatusKey(target.serverName, target.serviceName)))
     const parsedKeys = new Set(statuses.keys())
     const rejectedKeys = [...parsedKeys].filter((key) => !targetKeys.has(key))
     statuses = new Map([...statuses].filter(([key]) => targetKeys.has(key)))
@@ -1315,11 +1325,12 @@ const api = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/infrastructure-status') {
       const status = await infrastructureMonitor.getStatus({ force: requestUrl.searchParams.has('refresh') })
+      const storage = await storageMonitor.getStatus()
       return send(response, 200, {
         ...status,
         panels: status.panels.map((panel) => ({
           ...panel,
-          servers: panel.servers.map((server) => ({ ...server, ec2ControlEnabled: ec2ControlEnabled() && server.ec2Control === true && Boolean(server.instanceId) })),
+          servers: panel.servers.map((server) => ({ ...server, storage: storage[server.name], ec2ControlEnabled: ec2ControlEnabled() && server.ec2Control === true && Boolean(server.instanceId) })),
         })),
       })
     }
@@ -1675,10 +1686,12 @@ api.on('clientError', (error, socket) => {
 function startServer() {
   validateRuntimeConfig()
   approvalNotificationSettings()
+  storageNotificationSettings()
   return api.listen(port, host, () => {
     deploymentScheduler.start()
     scheduledJobManager.start()
     approvalNotifier.start()
+    storageMonitor.start()
     log('info', 'server_started', { host, port, nodeEnv: process.env.NODE_ENV || 'development', authMode: authenticationMode() })
   })
 }
@@ -1689,6 +1702,7 @@ function shutdown(signal, exitWhenClosed = false) {
   deploymentScheduler.stop()
   scheduledJobManager.stop()
   approvalNotifier.stop()
+  storageMonitor.stop()
   log('info', 'server_stopping', { signal })
   api.close((error) => {
     if (error) log('error', 'server_shutdown_failed', { error: error.message })
@@ -1708,6 +1722,7 @@ if (isMainModule) {
     try {
       validateRuntimeConfig()
       approvalNotificationSettings()
+      storageNotificationSettings()
       process.send?.({ valid: true })
     } catch (error) {
       process.send?.({ valid: false, error: error.message })

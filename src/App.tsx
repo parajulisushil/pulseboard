@@ -89,7 +89,8 @@ type Integration = { provider: string; status: string; reason?: string; id?: num
 type CurrentRelease = { value?: string; defaultValue?: string; isOverride?: boolean; pipeline?: string; environment?: string; reason?: string }
 type IntegrationResponse = { currentRelease?: CurrentRelease; gitlab?: Integration; teamcity?: Integration }
 type DashboardConfig = { autoRefreshSeconds: number; statusRequestTimeoutMs: number }
-type InfrastructureMachine = { name: string; ip: string; instanceId?: string; awsRegion?: string; ec2ControlEnabled?: boolean; online: boolean; latencyMs: number | null; lastChecked: string }
+type InfrastructureStorage = { drive: string; label: string; share: string; status: 'healthy' | 'warning' | 'critical' | 'unknown'; totalBytes?: number; freeBytes?: number; freePercent?: number; checkedAt?: string; reason?: string }
+type InfrastructureMachine = { name: string; ip: string; instanceId?: string; awsRegion?: string; ec2ControlEnabled?: boolean; online: boolean; latencyMs: number | null; lastChecked: string; storage?: InfrastructureStorage }
 type InfrastructurePanel = { title: string; servers: InfrastructureMachine[] }
 type InfrastructureStatus = { panels: InfrastructurePanel[]; onlineCount: number; totalCount: number; generatedAt: string; refreshSeconds: number }
 type Notice = { message: string; tone: 'info' | 'error' }
@@ -710,10 +711,11 @@ function App() {
   const services = testMachines.flatMap((server) => server.services ?? [])
   const stoppedServices = services.filter((service) => service.status === 'stopped').length
   const unknownServices = services.filter((service) => service.status === 'unknown').length
-  const diskVolumes = testMachines.flatMap((server) => server.diskSpace?.volumes ?? [])
+  const infrastructureStorage = infrastructure?.panels.flatMap((panel) => panel.servers.flatMap((server) => server.storage ? [server.storage] : [])) ?? []
+  const diskVolumes = [...testMachines.flatMap((server) => server.diskSpace?.volumes ?? []), ...infrastructureStorage.filter((storage) => storage.status !== 'unknown')]
   const diskAlerts = diskVolumes.filter((volume) => volume.status !== 'healthy')
   const criticalDiskCount = diskVolumes.filter((volume) => volume.status === 'critical').length
-  const unknownDiskMachines = testMachines.filter((server) => server.services && server.diskSpace?.status !== 'available').length
+  const unknownDiskMachines = testMachines.filter((server) => server.services && server.diskSpace?.status !== 'available').length + infrastructureStorage.filter((storage) => storage.status === 'unknown').length
   const deploymentComparisons = testMachines.filter((server) => server.deployment)
   const deploymentUpdates = testMachines.filter((server) => server.deployment?.status === 'available')
   const unknownDeployments = deploymentComparisons.filter((server) => server.deployment?.status === 'unknown').length
@@ -832,6 +834,8 @@ function App() {
           </section>
           </>}
 
+          {activeSection === 'overview' && infrastructureStorage.length > 0 && <button type="button" className="stat-detail-link" onClick={() => navigateTo('infrastructure')}>View shared storage →</button>}
+
           {activeSection === 'infrastructure' && <>
           <section className="page-heading">
             <div><p className="eyebrow">Engineering estate</p><h1>Infrastructure status</h1><p className="subheading">ICMP availability and response time for servers used across Engineering.</p></div>
@@ -849,6 +853,15 @@ function App() {
                 <div className="infrastructure-card-heading"><span className={`server-status ${server.online ? 'online' : 'offline'}`} aria-label={server.online ? 'online' : 'offline'} /><h3>{server.name}</h3><strong>{server.online ? 'Online' : 'Offline'}</strong></div>
                 <p>{server.ip}</p>
                 <div className="infrastructure-card-status"><span>{server.latencyMs === null ? 'No response' : `${server.latencyMs} ms`}</span><time dateTime={server.lastChecked}>{new Date(server.lastChecked).toLocaleTimeString()}</time></div>
+                {server.storage && <div className="infrastructure-storage" id={`storage-${server.name}`}>
+                  <div className="disk-heading"><strong>{server.storage.label} · {server.storage.drive}</strong><span className={server.storage.status}>{server.storage.status === 'unknown' ? 'Unavailable' : server.storage.status === 'healthy' ? 'Healthy' : server.storage.status === 'critical' ? 'Critically low' : 'Low space'}</span></div>
+                  <p>{server.storage.share}</p>
+                  {server.storage.status === 'unknown' ? <p className="disk-unavailable">{server.storage.reason}</p> : <>
+                    <div className="disk-meter" role="meter" aria-label={`${server.name} ${server.storage.drive} disk used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={100 - server.storage.freePercent!}><span className={server.storage.status} style={{ width: `${100 - server.storage.freePercent!}%` }} /></div>
+                    <p className={`disk-free ${server.storage.status}`}>{formatDiskSize(server.storage.freeBytes!)} free ({server.storage.freePercent}%) of {formatDiskSize(server.storage.totalBytes!)}</p>
+                  </>}
+                  <small>{server.storage.checkedAt ? `Checked ${new Date(server.storage.checkedAt).toLocaleString()} · checks every 5 minutes` : 'Checks every 5 minutes'}</small>
+                </div>}
                 {server.ec2ControlEnabled && (() => {
                   const actionKey = `ec2:${server.name}`
                   const isPending = pendingActions.includes(actionKey)

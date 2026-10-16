@@ -146,9 +146,20 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
 
   const copyPassword = async (slackReply = false) => {
     if (!result) return
-    const text = slackReply ? `Your new password is\n${result.password}` : result.password
-    try { await navigator.clipboard.writeText(text); setCopyMessage(slackReply ? 'Slack reply copied to the clipboard.' : 'Password copied to the clipboard.') }
-    catch { setReveal(true); setCopyMessage(slackReply ? 'Copy is unavailable here. Type “Your new password is” on the first line, then copy the password below onto the next line.' : 'Copy is unavailable here. Select and copy the password below.') }
+    const text = slackReply ? `Your new password is\n\`${result.password}\`` : result.password
+    try {
+      if (slackReply && typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+        const escaped = result.password.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!))
+        try {
+          await navigator.clipboard.write([new ClipboardItem({
+            'text/plain': new Blob([text], { type: 'text/plain' }),
+            'text/html': new Blob([`<p>Your new password is<br><code>${escaped}</code></p>`], { type: 'text/html' }),
+          })])
+        } catch { await navigator.clipboard.writeText(text) }
+      } else { await navigator.clipboard.writeText(text) }
+      setCopyMessage(slackReply ? 'Slack reply copied to the clipboard.' : 'Password copied to the clipboard.')
+    }
+    catch { setReveal(true); setCopyMessage(slackReply ? 'Copy is unavailable here. Type “Your new password is” on the first line, then paste the password on the next line and apply Slack’s Code formatting.' : 'Copy is unavailable here. Select and copy the password below.') }
   }
 
   return (

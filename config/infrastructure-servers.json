@@ -33,6 +33,8 @@
   "instanceId": "i-0ac54021552504eef", "ec2Control": true,
   "awsRegion": "us-east-1" },
   { "name": "FS02", "ip": "172.31.43.227", "panel": "Other Servers",
+  "remoteHost": "fs02.ad.veniosystems.com",
+  "storage": { "drive": "G:", "label": "TeamCity storage", "share": "\\\\fs02\\teamcity" },
   "instanceId": "i-054052dd9a997f6d9",
   "awsRegion": "us-east-1" },
   { "name": "Testlab Console", "ip": "10.0.1.75", "panel": "Other Servers",

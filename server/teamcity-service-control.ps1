@@ -44,6 +44,7 @@ foreach ($serverGroup in ($targets | Group-Object -Property serverName)) {
         return
       }
       foreach ($item in $remoteItems) {
+        if ($item.storageOnly) { continue }
         $name = [string]$item.serviceKey
         try {
           $service = Get-Service -Name $name -ErrorAction Stop
@@ -97,6 +98,7 @@ foreach ($serverGroup in ($targets | Group-Object -Property serverName)) {
     if ($action -ne 'status') { throw }
     Write-Warning "Unable to query ${serverName}: $($_.Exception.Message)"
     foreach ($item in $items) {
+      if ($item.storageOnly) { continue }
       Write-Host "PULSEBOARD_SERVICE_STATUS|$($item.serverName)|$($item.serviceName)|Unknown"
     }
   }
