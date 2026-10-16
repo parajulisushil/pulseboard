@@ -72,6 +72,34 @@ test('failed delivery retries, missing readings preserve history, and stale snap
   state.missing = false
   await monitor.tick()
   assert.equal(state.calls.length, 2)
-  state.time += 600000
+  state.time += 86400000 + 240001
   assert.equal((await monitor.getStatus()).FS02.status, 'unknown')
+})
+
+test('manual refresh fetches a fresh reading and concurrent refreshes share one check', async (t) => {
+  const { state, monitor } = await fixture(t)
+  await monitor.tick()
+  state.free = 500
+  assert.equal((await monitor.getStatus()).FS02.freePercent, 15)
+  assert.equal(state.checks, 1)
+  const [first, second] = await Promise.all([monitor.getStatus({ force: true }), monitor.getStatus({ force: true })])
+  assert.equal(state.checks, 2)
+  assert.equal(first.FS02.freePercent, 50)
+  assert.equal(second.FS02.freePercent, 50)
+})
+
+test('background checks run at startup and once per day instead of every five minutes', async (t) => {
+  const { state, monitor } = await fixture(t)
+  state.free = 500
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => monitor.stop())
+  monitor.start()
+  await monitor.tick()
+  assert.equal(state.checks, 1)
+  t.mock.timers.tick(300000)
+  await monitor.getStatus()
+  assert.equal(state.checks, 1)
+  t.mock.timers.tick(86400000 - 300000)
+  await monitor.tick()
+  assert.equal(state.checks, 2)
 })

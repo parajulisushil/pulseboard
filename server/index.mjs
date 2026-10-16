@@ -1328,7 +1328,7 @@ const api = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/infrastructure-status') {
       const status = await infrastructureMonitor.getStatus({ force: requestUrl.searchParams.has('refresh') })
-      const storage = await storageMonitor.getStatus()
+      const storage = await storageMonitor.getStatus({ force: requestUrl.searchParams.has('refresh') })
       return send(response, 200, {
         ...status,
         panels: status.panels.map((panel) => ({

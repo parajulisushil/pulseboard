@@ -267,7 +267,7 @@ function App() {
   const refreshInfrastructure = useCallback(async (force = false) => {
     setInfrastructureLoading(true)
     try {
-      const result = await apiRequest<InfrastructureStatus>(`/api/infrastructure-status${force ? '?refresh=1' : ''}`, {}, 10000)
+      const result = await apiRequest<InfrastructureStatus>(`/api/infrastructure-status${force ? '?refresh=1' : ''}`, {}, force ? statusRequestTimeoutMs.current : 10000)
       setInfrastructure(result)
       setInfrastructureError(undefined)
       setInfrastructureLastRefresh(new Date(result.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
@@ -839,7 +839,7 @@ function App() {
           {activeSection === 'infrastructure' && <>
           <section className="page-heading">
             <div><p className="eyebrow">Engineering estate</p><h1>Infrastructure status</h1><p className="subheading">ICMP availability and response time for servers used across Engineering.</p></div>
-            <button type="button" className="refresh-button" disabled={infrastructureLoading} onClick={() => void refreshInfrastructure(true)} title="Run a fresh ping check for every infrastructure server"><span>↻</span> Refresh <small>{infrastructureLoading ? 'checking...' : infrastructureLastRefresh}</small></button>
+            <button type="button" className="refresh-button" disabled={infrastructureLoading} onClick={() => void refreshInfrastructure(true)} title="Run fresh availability and storage checks"><span>↻</span> Refresh <small>{infrastructureLoading ? 'checking...' : infrastructureLastRefresh}</small></button>
           </section>
           <section className="infrastructure-summary" aria-label="Infrastructure availability summary">
             <div><span className="stat-icon green" aria-hidden="true">⌁</span><div><small>Servers online</small><strong>{infrastructure?.onlineCount ?? '—'} <span>/ {infrastructure?.totalCount ?? '—'}</span></strong></div></div>
@@ -860,7 +860,7 @@ function App() {
                     <div className="disk-meter" role="meter" aria-label={`${server.name} ${server.storage.drive} disk used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={100 - server.storage.freePercent!}><span className={server.storage.status} style={{ width: `${100 - server.storage.freePercent!}%` }} /></div>
                     <p className={`disk-free ${server.storage.status}`}>{formatDiskSize(server.storage.freeBytes!)} free ({server.storage.freePercent}%) of {formatDiskSize(server.storage.totalBytes!)}</p>
                   </>}
-                  <small>{server.storage.checkedAt ? `Checked ${new Date(server.storage.checkedAt).toLocaleString()} · checks every 5 minutes` : 'Checks every 5 minutes'}</small>
+                  <small>{server.storage.checkedAt ? `Checked ${new Date(server.storage.checkedAt).toLocaleString()} · checks daily, on app startup, and on manual refresh` : 'Checks daily, on app startup, and on manual refresh'}</small>
                 </div>}
                 {server.ec2ControlEnabled && (() => {
                   const actionKey = `ec2:${server.name}`

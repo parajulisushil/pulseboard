@@ -17,7 +17,7 @@ export function classifyStorage(totalBytes, freeBytes, env = process.env) {
   }
 }
 
-export function createStorageMonitor({ inventory, checkVolumes, filePath, settings = storageNotificationSettings, fetchImpl = fetch, audit = () => {}, intervalMs = 300000, now = () => new Date() }) {
+export function createStorageMonitor({ inventory, checkVolumes, filePath, settings = storageNotificationSettings, fetchImpl = fetch, audit = () => {}, intervalMs = 86400000, now = () => new Date() }) {
   let snapshot = {}, running, timer, stopped = true, notified
   async function persist() {
     await mkdir(path.dirname(filePath), { recursive: true })
@@ -84,7 +84,8 @@ export function createStorageMonitor({ inventory, checkVolumes, filePath, settin
   }
   return {
     tick,
-    async getStatus() {
+    async getStatus({ force = false } = {}) {
+      if (force) await tick()
       const result = {}
       for (const server of (await inventory()).filter((item) => item.storage)) {
         const stored = snapshot[server.name]
