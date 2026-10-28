@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiRequest } from './api'
+import { currentRefreshTime, refreshTimeLabel, refreshTimeTitle } from './refreshTime'
 import './GitLabApprovals.css'
 
 type Approver = { id: number; name: string; username: string }
@@ -48,14 +49,11 @@ type ApprovalFilter = 'ready' | 'drafts' | 'all'
 
 const mergeRequestKey = (mr: MergeRequest) => `${mr.projectId}:${mr.iid}`
 const isDraft = (mr: MergeRequest) => /^Draft\b/.test(mr.reason || '')
-const refreshTimeLabel = (value?: string) => value
-  ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  : 'Not checked'
-
 export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNotice }: Props) {
   const [data, setData] = useState<ApprovalList>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const [lastRefresh, setLastRefresh] = useState('Not checked')
   const [pending, setPending] = useState<string[]>([])
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
   const [filter, setFilter] = useState<ApprovalFilter>('ready')
@@ -77,6 +75,7 @@ export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNoti
       if (controller.signal.aborted) return
       setData(result)
       setError(undefined)
+      setLastRefresh(currentRefreshTime())
     } catch (failure) {
       if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Unable to load GitLab approvals.')
     } finally {
@@ -155,7 +154,7 @@ export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNoti
           <p>Code Freeze requests awaiting your additional approval after normal approval is complete.</p>
           <p>Auto-refresh every {autoRefreshSeconds}s · Code Freeze alerts {data ? (data.codeFreezeApplied ? 'enabled' : 'disabled') : 'checking...'}</p>
         </div>
-        <button type="button" className="refresh-button" disabled={loading} onClick={() => void refresh(true)}><span>↻</span> Refresh approvals <small>{loading ? 'checking...' : refreshTimeLabel(data?.checkedAt)}</small></button>
+        <button type="button" className="refresh-button" disabled={loading} onClick={() => void refresh(true)} title={`${refreshTimeTitle(lastRefresh)}${data?.checkedAt ? ` · Data checked ${new Date(data.checkedAt).toLocaleString()}` : ''}`}><span>↻</span> Refresh approvals <small>{refreshTimeLabel(lastRefresh, loading, !!error)}</small></button>
       </div>
       <div className="approval-panel" aria-busy={loading}>
         {data?.projects && !!data.mergeRequests.length && <div className="filter-tabs" role="group" aria-label="Filter merge requests">

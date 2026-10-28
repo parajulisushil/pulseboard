@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { apiRequest } from './api'
+import { currentRefreshTime, refreshTimeLabel, refreshTimeTitle } from './refreshTime'
 import GitLabApprovals from './GitLabApprovals'
 import AdPasswords from './AdPasswords'
 import DeploymentControls from './DeploymentControls'
@@ -158,6 +159,11 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [apiHealthy, setApiHealthy] = useState(false)
   const [lastRefresh, setLastRefresh] = useState('Not checked')
+  const [serversRefreshFailed, setServersRefreshFailed] = useState(false)
+  const [deliveryLastRefresh, setDeliveryLastRefresh] = useState('Not checked')
+  const [deliveryRefreshFailed, setDeliveryRefreshFailed] = useState(false)
+  const [overviewLastRefresh, setOverviewLastRefresh] = useState('Not checked')
+  const [overviewRefreshFailed, setOverviewRefreshFailed] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [pendingActions, setPendingActions] = useState<string[]>([])
   const [refreshingServers, setRefreshingServers] = useState<string[]>([])
@@ -180,6 +186,9 @@ function App() {
 
   const noticeTimer = useRef<number | null>(null)
   const fullRefreshInFlight = useRef(false)
+  const deliveryRefreshInFlight = useRef<Promise<boolean | undefined> | null>(null)
+  const overviewRefreshInFlight = useRef(false)
+  const infrastructureRefreshInFlight = useRef(false)
   const serverRefreshInFlight = useRef(new Set<string>())
   const serverRefreshIds = useRef(new Map<string, number>())
   const actionInFlight = useRef(new Set<string>())
@@ -205,11 +214,15 @@ function App() {
     try {
       const nextServers = await apiRequest<Server[]>(`/api/servers${force ? '?refresh=1' : ''}`, {}, statusRequestTimeoutMs.current)
       setServers(nextServers)
-      setLastRefresh(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+      setLastRefresh(currentRefreshTime())
+      setServersRefreshFailed(false)
       setApiHealthy(true)
+      return true
     } catch (error) {
       setApiHealthy(false)
+      setServersRefreshFailed(true)
       showNotice(error instanceof Error ? error.message : 'Unable to load live server status', 'error')
+      return false
     } finally {
       fullRefreshInFlight.current = false
       setLoading(false)
@@ -226,7 +239,6 @@ function App() {
       const nextServer = await apiRequest<Server>(`/api/servers/${encodeURIComponent(serverName)}?refresh=1`, {}, statusRequestTimeoutMs.current)
       if (serverRefreshIds.current.get(serverName) !== refreshId) return
       setServers((current) => current.map((server) => server.name === nextServer.name ? nextServer : server))
-      setLastRefresh(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
       setApiHealthy(true)
       showNotice(`${serverName} status refreshed`)
     } catch (error) {
@@ -254,29 +266,54 @@ function App() {
       lastSuccessfulIntegrationBranch.current = successfulBranch
       setIntegrations(result)
       setReleaseInput((current) => current || result.currentRelease?.value || '')
+      return true
     } catch (error) {
       if (refreshId !== integrationRefreshId.current) return
       selectedIntegrationRelease.current = lastSuccessfulIntegrationRelease.current
       visibleIntegrationBranch.current = lastSuccessfulIntegrationBranch.current
       showNotice(error instanceof Error ? error.message : 'Unable to load pipeline status', 'error')
+      return false
     } finally {
       if (refreshId === integrationRefreshId.current) setIntegrationsLoading(false)
     }
   }, [showNotice])
 
+  const refreshDelivery = useCallback((force = false) => {
+    if (deliveryRefreshInFlight.current) return deliveryRefreshInFlight.current
+    const operation = (async () => {
+      const [serversRefreshed, integrationsRefreshed] = await Promise.all([refreshServers(force), refreshIntegrations()])
+      if (serversRefreshed && integrationsRefreshed) {
+        setDeliveryLastRefresh(currentRefreshTime())
+        setDeliveryRefreshFailed(false)
+        return true
+      }
+      if (serversRefreshed === false || integrationsRefreshed === false) {
+        setDeliveryRefreshFailed(true)
+        return false
+      }
+      return undefined
+    })()
+    deliveryRefreshInFlight.current = operation
+    void operation.finally(() => { if (deliveryRefreshInFlight.current === operation) deliveryRefreshInFlight.current = null })
+    return operation
+  }, [refreshIntegrations, refreshServers])
+
   const refreshInfrastructure = useCallback(async (force = false) => {
+    if (infrastructureRefreshInFlight.current) return
+    infrastructureRefreshInFlight.current = true
     setInfrastructureLoading(true)
     try {
       const result = await apiRequest<InfrastructureStatus>(`/api/infrastructure-status${force ? '?refresh=1' : ''}`, {}, force ? statusRequestTimeoutMs.current : 10000)
       setInfrastructure(result)
       setInfrastructureError(undefined)
-      setInfrastructureLastRefresh(new Date(result.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
+      setInfrastructureLastRefresh(currentRefreshTime())
       setApiHealthy(true)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to check infrastructure status'
       setInfrastructureError(message)
       showNotice(message, 'error')
     } finally {
+      infrastructureRefreshInFlight.current = false
       setInfrastructureLoading(false)
     }
   }, [showNotice])
@@ -310,12 +347,28 @@ function App() {
     }
     overviewSummaryInFlight.current = false
     setOverviewSummaryLoading(false)
+    return [approvalsResult, adResult, scheduledJobsResult].every((result) => result.status === 'fulfilled')
   }, [])
+
+  const refreshOverview = useCallback(async (force = false) => {
+    if (overviewRefreshInFlight.current) return
+    overviewRefreshInFlight.current = true
+    try {
+      const [deliveryResult, summaryResult] = await Promise.all([refreshDelivery(force), refreshOverviewSummaries()])
+      if (deliveryResult && summaryResult) {
+        setOverviewLastRefresh(currentRefreshTime())
+        setOverviewRefreshFailed(false)
+      } else if (deliveryResult === false || summaryResult === false) {
+        setOverviewRefreshFailed(true)
+      }
+    } finally {
+      overviewRefreshInFlight.current = false
+    }
+  }, [refreshDelivery, refreshOverviewSummaries])
 
   useEffect(() => {
     const initialRefresh = window.setTimeout(() => {
-      void refreshServers()
-      void refreshIntegrations()
+      void refreshDelivery()
       void refreshInfrastructure()
       void apiRequest<DashboardConfig>('/api/config')
         .then((config) => {
@@ -325,26 +378,36 @@ function App() {
         .catch((error) => showNotice(error instanceof Error ? error.message : 'Unable to load dashboard configuration', 'error'))
     }, 0)
     return () => window.clearTimeout(initialRefresh)
-  }, [refreshInfrastructure, refreshIntegrations, refreshServers, showNotice])
+  }, [refreshDelivery, refreshInfrastructure, showNotice])
 
   useEffect(() => {
     const intervalMs = autoRefreshSeconds * 1000
-    const serverTimer = window.setInterval(() => void refreshServers(true), intervalMs)
-    const integrationTimer = window.setInterval(() => void refreshIntegrations(), intervalMs)
+    const deliveryTimer = window.setInterval(() => void refreshDelivery(true), intervalMs)
     const infrastructureTimer = window.setInterval(() => void refreshInfrastructure(), intervalMs)
     return () => {
-      window.clearInterval(serverTimer)
-      window.clearInterval(integrationTimer)
+      window.clearInterval(deliveryTimer)
       window.clearInterval(infrastructureTimer)
     }
-  }, [autoRefreshSeconds, refreshInfrastructure, refreshIntegrations, refreshServers])
+  }, [autoRefreshSeconds, refreshDelivery, refreshInfrastructure])
+
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        if (activeSection === 'overview') void refreshOverview(true)
+        else void refreshDelivery(true)
+        if (activeSection === 'infrastructure') void refreshInfrastructure(true)
+      }
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => document.removeEventListener('visibilitychange', refreshWhenVisible)
+  }, [activeSection, refreshDelivery, refreshInfrastructure, refreshOverview])
 
   useEffect(() => {
     if (activeSection !== 'overview') return
-    const initial = window.setTimeout(() => void refreshOverviewSummaries(), 0)
-    const interval = window.setInterval(() => void refreshOverviewSummaries(), Math.max(autoRefreshSeconds, 60) * 1000)
+    const initial = window.setTimeout(() => void refreshOverview(), 0)
+    const interval = window.setInterval(() => void refreshOverview(true), Math.max(autoRefreshSeconds, 60) * 1000)
     return () => { window.clearTimeout(initial); window.clearInterval(interval) }
-  }, [activeSection, autoRefreshSeconds, refreshOverviewSummaries])
+  }, [activeSection, autoRefreshSeconds, refreshOverview])
 
   useEffect(() => () => {
     if (noticeTimer.current) window.clearTimeout(noticeTimer.current)
@@ -468,8 +531,6 @@ function App() {
         const result = await apiRequest<InfrastructureStatus>('/api/infrastructure-status?refresh=1', {}, 10000)
         transientFailures = 0
         setInfrastructure(result)
-        setInfrastructureError(undefined)
-        setInfrastructureLastRefresh(new Date(result.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
         const machine = result.panels.flatMap((panel) => panel.servers).find((server) => server.name === serverName)
         const finished = machine && (action === 'start' ? machine.online : !machine.online)
         if (finished) {
@@ -786,7 +847,7 @@ function App() {
           {activeSection === 'overview' && <>
           <section id="overview" className="page-heading">
             <div><p className="eyebrow">Operations workspace</p><h1>Workspace overview</h1><p className="subheading">A summary of server health, scheduled automation, release approvals, and account operations.</p></div>
-            <button type="button" className="refresh-button" disabled={loading || overviewSummaryLoading} onClick={() => { void refreshServers(true); void refreshIntegrations(); void refreshOverviewSummaries() }} title="Refresh all overview summaries"><span>↻</span> Refresh <small>{loading || overviewSummaryLoading ? 'checking...' : lastRefresh}</small></button>
+            <button type="button" className="refresh-button" disabled={loading || integrationsLoading || overviewSummaryLoading} onClick={() => void refreshOverview(true)} title={refreshTimeTitle(overviewLastRefresh)}><span>↻</span> Refresh <small>{refreshTimeLabel(overviewLastRefresh, loading || integrationsLoading || overviewSummaryLoading, overviewRefreshFailed)}</small></button>
           </section>
 
           <section className="overview-page-grid" aria-label="Workspace areas">
@@ -839,7 +900,7 @@ function App() {
           {activeSection === 'infrastructure' && <>
           <section className="page-heading">
             <div><p className="eyebrow">Engineering estate</p><h1>Infrastructure status</h1><p className="subheading">ICMP availability and response time for servers used across Engineering.</p></div>
-            <button type="button" className="refresh-button" disabled={infrastructureLoading} onClick={() => void refreshInfrastructure(true)} title="Run fresh availability and storage checks"><span>↻</span> Refresh <small>{infrastructureLoading ? 'checking...' : infrastructureLastRefresh}</small></button>
+            <button type="button" className="refresh-button" disabled={infrastructureLoading} onClick={() => void refreshInfrastructure(true)} title={refreshTimeTitle(infrastructureLastRefresh)}><span>↻</span> Refresh <small>{refreshTimeLabel(infrastructureLastRefresh, infrastructureLoading, !!infrastructureError)}</small></button>
           </section>
           <section className="infrastructure-summary" aria-label="Infrastructure availability summary">
             <div><span className="stat-icon green" aria-hidden="true">⌁</span><div><small>Servers online</small><strong>{infrastructure?.onlineCount ?? '—'} <span>/ {infrastructure?.totalCount ?? '—'}</span></strong></div></div>
@@ -887,7 +948,7 @@ function App() {
           {activeSection === 'delivery' && <>
           <section className="page-heading">
             <div><p className="eyebrow">CI/CD operations</p><h1>Delivery systems</h1><p className="subheading">Check release activity, pipelines, runners, and build agents in one place.</p></div>
-            <button type="button" className="refresh-button" disabled={loading || integrationsLoading} onClick={() => { void refreshServers(true); void refreshIntegrations() }} title={`Auto-refreshes every ${autoRefreshSeconds} seconds`}><span>↻</span> Refresh <small>{loading || integrationsLoading ? 'checking...' : lastRefresh}</small></button>
+            <button type="button" className="refresh-button" disabled={loading || integrationsLoading} onClick={() => void refreshDelivery(true)} title={refreshTimeTitle(deliveryLastRefresh)}><span>↻</span> Refresh <small>{refreshTimeLabel(deliveryLastRefresh, loading || integrationsLoading, deliveryRefreshFailed)}</small></button>
           </section>
 
           <form className="delivery-version-form" onSubmit={(event) => void handleReleaseCheck(event)}>
@@ -960,7 +1021,7 @@ function App() {
           {activeSection === 'servers' && <>
           <section className="page-heading">
             <div><p className="eyebrow">Daily test environment</p><h1>Test machines</h1><p className="subheading">Monitor daily-use machines, services, deployments, and storage.</p></div>
-            <button type="button" className="refresh-button" disabled={loading} onClick={() => void refreshServers(true)} title={`Auto-refreshes every ${autoRefreshSeconds} seconds`}><span>↻</span> Refresh <small>{loading ? 'checking...' : lastRefresh}</small></button>
+            <button type="button" className="refresh-button" disabled={loading} onClick={() => void refreshServers(true)} title={refreshTimeTitle(lastRefresh)}><span>↻</span> Refresh <small>{refreshTimeLabel(lastRefresh, loading, serversRefreshFailed)}</small></button>
           </section>
           <div id="server-health" className="section-header">
             <div><h2>Test machine health</h2><p>Monitor availability, services, and deployed versions.</p></div>

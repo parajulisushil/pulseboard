@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { apiRequest } from './api'
+import { currentRefreshTime, refreshTimeLabel, refreshTimeTitle } from './refreshTime'
 import './AdPasswords.css'
 
 type AdUser = {
@@ -37,10 +38,6 @@ type ResetResult = {
 }
 
 const dateLabel = (value: string | null) => value ? new Date(value).toLocaleString() : 'Unavailable'
-const refreshTimeLabel = (value?: string) => value
-  ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  : 'Not checked'
-
 function expiryLabel(user: AdUser) {
   if (user.expiryStatus === 'never') return 'Never expires'
   if (user.expiryStatus === 'must_change') return 'Must change at next sign-in'
@@ -56,6 +53,7 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
   const [data, setData] = useState<UserList>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [lastRefresh, setLastRefresh] = useState('Not checked')
   const [selected, setSelected] = useState<AdUser>()
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -81,7 +79,7 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
       const params = new URLSearchParams({ view: criteria.view, q: criteria.query })
       if (force) params.set('refresh', '1')
       const response = await apiRequest<UserList>(`/api/ad/users?${params}`, { signal: controller.signal }, 80000)
-      if (!controller.signal.aborted) setData(response)
+      if (!controller.signal.aborted) { setData(response); setLastRefresh(currentRefreshTime()) }
     } catch (failure) {
       if (!controller.signal.aborted) { setData(undefined); setError(failure instanceof Error ? failure.message : 'Unable to read AD users.') }
     } finally {
@@ -100,6 +98,7 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
 
   const chooseView = (view: Criteria['view']) => {
     setQuery(''); setData(undefined); setSelected(undefined); setPassword(''); setConfirmation(''); setResetError('')
+    setLastRefresh('Not checked')
     setCriteria({ view, query: '' })
   }
 
@@ -113,6 +112,7 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     setSelected(undefined); setPassword(''); setConfirmation(''); setResetError(''); setData(undefined)
+    setLastRefresh('Not checked')
     setCriteria({ view: criteria.view, query: query.trim() })
   }
 
@@ -166,7 +166,7 @@ export default function AdPasswords({ onResetPending }: { onResetPending: (pendi
     <section id="ad-passwords" className="ad-passwords" aria-labelledby="ad-heading">
       <div className="page-heading">
         <div><p className="eyebrow">Active Directory</p><h1 id="ad-heading">AD passwords</h1><p className="subheading">Check password expiry and reset a selected user’s password.</p></div>
-        <button type="button" className="refresh-button" disabled={loading || pending || (criteria.view === 'search' && !criteria.query)} onClick={() => void refresh(true)}><span>↻</span> Refresh users <small>{loading ? 'checking...' : refreshTimeLabel(data?.checkedAt)}</small></button>
+        <button type="button" className="refresh-button" disabled={loading || pending || (criteria.view === 'search' && !criteria.query)} onClick={() => void refresh(true)} title={refreshTimeTitle(lastRefresh)}><span>↻</span> Refresh users <small>{refreshTimeLabel(lastRefresh, loading, !!error)}</small></button>
       </div>
 
       <div className="ad-panel">
