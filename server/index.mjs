@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { approveGitLabMergeRequest, getGitLabApprovalSummary, GitLabApprovalError, listGitLabApprovals, readApprovalRequest } from './gitlab-approvals.mjs'
+import { approveGitLabMergeRequest, getGitLabApprovalSummary, GitLabApprovalError, listGitLabApprovals, listOpenGitLabMergeRequests, readApprovalRequest } from './gitlab-approvals.mjs'
 import { approvalNotificationSettings, createApprovalNotifier } from './approval-notifications.mjs'
 import { createStorageMonitor, storageNotificationSettings } from './storage-monitor.mjs'
 import { adPasswords, AdPasswordError, readAdResetRequest } from './ad-passwords.mjs'
@@ -1464,6 +1464,9 @@ const api = createServer(async (request, response) => {
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/gitlab/approvals') {
       return send(response, 200, await listGitLabApprovals())
+    }
+    if (request.method === 'GET' && requestUrl.pathname === '/api/gitlab/merge-requests') {
+      return send(response, 200, await listOpenGitLabMergeRequests())
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/gitlab/approval-summary') {
       return send(response, 200, await getGitLabApprovalSummary())

@@ -225,6 +225,63 @@ export async function listGitLabApprovals({ includeAiReview = true } = {}) {
   }
 }
 
+// This list is independent of approval rules and the optional approval target-branch filter.
+export async function listOpenGitLabMergeRequests() {
+  let config
+  const mergeRequests = []
+  const warnings = []
+  let completedProjects = 0
+  const signal = AbortSignal.timeout(60000)
+  try {
+    config = configuration()
+    let index = 0
+    await Promise.all(Array.from({ length: Math.min(2, config.projects.length) }, async () => {
+      while (index < config.projects.length) {
+        const project = config.projects[index++]
+        const projectConfig = { ...config, project }
+        try {
+          const seen = new Set()
+          for (const state of ['opened', 'closed']) {
+          let page = 1
+          while (page) {
+            const query = new URLSearchParams({ state, scope: 'all', per_page: '100', page: String(page), order_by: 'created_at', sort: 'desc' })
+            const { data, nextPage } = await requestGitLab(projectConfig, `${projectPath(projectConfig)}/merge_requests?${query}`, { signal })
+            if (!Array.isArray(data)) throw new GitLabApprovalError('GitLab returned an invalid merge request list.')
+            let added = 0
+            for (const mr of data) {
+              if (seen.has(mr.iid)) continue
+              seen.add(mr.iid)
+              added++
+              if (!['opened', 'closed'].includes(mr.state)) continue
+              const names = (users) => Array.isArray(users) ? users.map((person) => person?.name || person?.username).filter(Boolean) : []
+              mergeRequests.push({
+                projectId: project, projectName: mr.references?.full?.replace(/!\d+$/, '') || `Project ${project}`,
+                iid: mr.iid, title: mr.title, webUrl: mr.web_url,
+                author: mr.author?.name || mr.author?.username || 'Unknown',
+                assignees: names(mr.assignees?.length ? mr.assignees : mr.assignee ? [mr.assignee] : []),
+                reviewers: names(mr.reviewers), createdAt: mr.created_at, updatedAt: mr.updated_at,
+                sourceBranch: mr.source_branch, targetBranch: mr.target_branch,
+                state: mr.state, draft: Boolean(mr.draft || mr.work_in_progress), labels: Array.isArray(mr.labels) ? mr.labels : [],
+              })
+            }
+            const followingPage = nextPage === null ? (data.length === 100 ? page + 1 : 0) : Number(nextPage)
+            if (!Number.isSafeInteger(followingPage) || followingPage < 0 || (followingPage && (followingPage <= page || !added))) throw new GitLabApprovalError('GitLab pagination could not be completed.')
+            page = followingPage
+          }
+          }
+          completedProjects++
+        } catch (error) {
+          warnings.push(`Project ${project}: ${error instanceof Error ? error.message : 'Unable to load merge requests.'}`)
+        }
+      }
+    }))
+  } catch (error) {
+    warnings.push(error instanceof Error ? error.message : 'Unable to load merge requests.')
+  }
+  mergeRequests.sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0) || Number(a.projectId) - Number(b.projectId) || b.iid - a.iid)
+  return { status: warnings.length ? (completedProjects || mergeRequests.length ? 'partial' : 'unknown') : 'available', projects: config?.projects ?? [], mergeRequests, warnings, checkedAt: new Date().toISOString() }
+}
+
 export async function getGitLabApprovalSummary() {
   const result = await listGitLabApprovals({ includeAiReview: false })
   return {

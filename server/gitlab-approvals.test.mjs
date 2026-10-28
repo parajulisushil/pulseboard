@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import test from 'node:test'
-import { approveGitLabMergeRequest, getGitLabApprovalSummary, listGitLabApprovals, pendingApprovalRules } from './gitlab-approvals.mjs'
+import { approveGitLabMergeRequest, getGitLabApprovalSummary, listGitLabApprovals, listOpenGitLabMergeRequests, pendingApprovalRules } from './gitlab-approvals.mjs'
 import { api } from './index.mjs'
 
 const sha = 'a'.repeat(40)
@@ -142,6 +142,34 @@ test('lists every page, including group eligibility, with drafts visible but dis
   assert(calls.every((call) => call.token === 'approval-token'))
   assert(calls.some((call) => call.url.pathname.includes('21')))
   assert.equal(JSON.stringify(result).includes('approval-token'), false)
+})
+
+test('lists unmerged merge requests across branches and pages without approval checks', async (context) => {
+  const calls = await fakeGitLab(context, (call) => {
+    if (call.url.pathname.endsWith('/merge_requests')) {
+      const closed = call.url.searchParams.get('state') === 'closed'
+      const second = call.url.searchParams.get('page') === '2'
+      if (closed) return { body: [{ ...mr, state: 'closed', created_at: '2025-01-01T00:00:00Z' }], headers: { 'X-Next-Page': '' } }
+      return { body: second ? [{ ...mr, iid: 2, target_branch: 'main', draft: true, created_at: '2025-02-01T00:00:00Z', assignees: [{ name: 'Assignee' }], reviewers: [{ username: 'reviewer' }], labels: ['bug'] }] : [{ ...mr, iid: 3, state: 'merged' }], headers: { 'X-Next-Page': second ? '' : '2' } }
+    }
+    return defaultResponse(call)
+  })
+  process.env.GITLAB_APPROVAL_TARGET_BRANCH = 'release/11.8.5'
+  const result = await listOpenGitLabMergeRequests()
+  assert.equal(result.status, 'available')
+  assert.deepEqual(result.mergeRequests.map((item) => item.iid), [2, 1])
+  assert.equal(result.mergeRequests[1].state, 'closed')
+  assert.deepEqual({ author: result.mergeRequests[0].author, assignees: result.mergeRequests[0].assignees, reviewers: result.mergeRequests[0].reviewers, labels: result.mergeRequests[0].labels, draft: result.mergeRequests[0].draft, targetBranch: result.mergeRequests[0].targetBranch }, { author: 'Developer', assignees: ['Assignee'], reviewers: ['reviewer'], labels: ['bug'], draft: true, targetBranch: 'main' })
+  assert(calls.every((call) => call.url.pathname.endsWith('/merge_requests') && !call.url.searchParams.has('target_branch') && ['opened', 'closed'].includes(call.url.searchParams.get('state'))))
+})
+
+test('reports partial open merge request results when a project fails', async (context) => {
+  await fakeGitLab(context, (call) => call.url.pathname.includes('/projects/21/') ? { status: 403 } : defaultResponse(call))
+  process.env.GITLAB_APPROVAL_PROJECT_IDS = '21,22'
+  const result = await listOpenGitLabMergeRequests()
+  assert.equal(result.status, 'partial')
+  assert.deepEqual(result.mergeRequests.map((item) => item.projectId), ['22'])
+  assert.match(result.warnings[0], /Project 21/)
 })
 
 test('skips AI review and diff retrieval for draft merge requests', async (context) => {
@@ -303,6 +331,7 @@ test('approval routes require authentication, request verification, and a valid 
   const base = `http://127.0.0.1:${api.address().port}`
   const headers = { Authorization: `Basic ${Buffer.from('operator:test-password-long-enough').toString('base64')}`, 'Content-Type': 'application/json' }
   assert.equal((await fetch(`${base}/api/gitlab/approvals`)).status, 401)
+  assert.equal((await fetch(`${base}/api/gitlab/merge-requests`)).status, 401)
   const endpoint = `${base}/api/gitlab/merge-requests/1/approve`
   assert.equal((await fetch(endpoint, { method: 'POST' })).status, 401)
   assert.equal((await fetch(endpoint, { method: 'POST', headers })).status, 403)
@@ -312,6 +341,8 @@ test('approval routes require authentication, request verification, and a valid 
   assert.equal(calls.length, 0)
   const list = await fetch(`${base}/api/gitlab/approvals`, { headers })
   assert.equal((await list.json()).mergeRequests.length, 1)
+  const openList = await fetch(`${base}/api/gitlab/merge-requests`, { headers })
+  assert.equal((await openList.json()).mergeRequests.length, 1)
   const summary = await fetch(`${base}/api/gitlab/approval-summary`, { headers })
   assert.deepEqual(Object.fromEntries(Object.entries(await summary.json()).filter(([key]) => ['pendingCount', 'readyCount', 'draftCount'].includes(key))), { pendingCount: 1, readyCount: 1, draftCount: 0 })
   const result = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify({ projectId: '21', sha, userId: user.id }) })

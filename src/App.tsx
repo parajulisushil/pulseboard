@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { apiRequest } from './api'
 import { currentRefreshTime, refreshTimeLabel, refreshTimeTitle } from './refreshTime'
-import GitLabApprovals from './GitLabApprovals'
+import GitLabApprovalsPage from './GitLabApprovalsPage'
 import AdPasswords from './AdPasswords'
 import DeploymentControls from './DeploymentControls'
 import ScheduledJobs from './ScheduledJobs'
@@ -940,9 +940,9 @@ function App() {
 
           {activeSection === 'approvals' && <>
           <section className="page-heading">
-            <div><p className="eyebrow">Release governance</p><h1>Merge request approvals</h1><p className="subheading">Review Code Freeze requests and critical AI suggestions before approving.</p></div>
+            <div><p className="eyebrow">Release governance</p><h1>Merge request approvals</h1><p className="subheading">Review Code Freeze approvals and unmerged requests across your configured projects.</p></div>
           </section>
-          <GitLabApprovals autoRefreshSeconds={autoRefreshSeconds} refreshKey={0} onNotice={showNotice} />
+          <GitLabApprovalsPage autoRefreshSeconds={autoRefreshSeconds} onNotice={showNotice} />
           </>}
 
           {activeSection === 'delivery' && <>
