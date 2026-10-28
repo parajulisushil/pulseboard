@@ -70,6 +70,7 @@ type Server = {
   agentStatus?: TeamCityAgentStatus
 }
 type TeamCityBuild = { id?: number; number?: string; webUrl?: string; startDate?: string; buildTypeId?: string; state?: string; component?: string }
+type TeamCityPendingBuild = { buildTypeId: string; name: string; id: number; number?: string; webUrl?: string; includedBuildIds: number[] }
 type TeamCityPendingSource = { buildTypeId: string; name: string; pendingChanges: number; webUrl?: string }
 type TeamCityComponent = {
   key: 'console' | 'api' | 'web'
@@ -79,6 +80,7 @@ type TeamCityComponent = {
   checkedConfigurations: number
   pendingChanges: number
   pendingSources: TeamCityPendingSource[]
+  pendingBuilds?: TeamCityPendingBuild[]
   truncated?: boolean
   builds: TeamCityBuild[]
   activeBuild?: TeamCityBuild
@@ -256,7 +258,7 @@ function App() {
     integrationRefreshId.current = refreshId
     setIntegrationsLoading(true)
     try {
-      const result = await apiRequest<IntegrationResponse>(`/api/integrations${selectedRelease ? `?release=${encodeURIComponent(selectedRelease)}` : ''}`)
+      const result = await apiRequest<IntegrationResponse>(`/api/integrations${selectedRelease ? `?release=${encodeURIComponent(selectedRelease)}` : ''}`, {}, 65000)
       if (refreshId !== integrationRefreshId.current) return
       const successfulRelease = result.currentRelease?.isOverride ? result.currentRelease.value || selectedRelease : ''
       const successfulBranch = result.teamcity?.branch || normalizedReleaseBranch(result.currentRelease?.value)
@@ -707,7 +709,8 @@ function App() {
     const branch = teamCityReleaseBranch || 'CURRENT_RELEASE'
     const actionKey = componentBuildActionKey(component.key, branch)
     if (actionInFlight.current.has(actionKey)) return
-    const pendingLabel = `${component.pendingChanges}${component.truncated ? '+' : ''} pending ${component.pendingChanges === 1 ? 'change' : 'changes'}`
+    const pendingBuildCount = component.pendingBuilds?.length || 0
+    const pendingLabel = [component.pendingChanges ? `${component.pendingChanges}${component.truncated ? '+' : ''} pending ${component.pendingChanges === 1 ? 'change' : 'changes'}` : '', pendingBuildCount ? `${pendingBuildCount} newer dependency ${pendingBuildCount === 1 ? 'build' : 'builds'}` : ''].filter(Boolean).join(' · ')
     const sourceLabel = component.pendingSources.length > 1
       ? ` across ${component.pendingSources.length} configurations`
       : component.pendingSources[0]?.name ? ` in ${component.pendingSources[0].name}` : ''
@@ -727,6 +730,7 @@ function App() {
         integrations.currentRelease?.isOverride
           ? { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Pulseboard-Request': '1' }, body: JSON.stringify({ release: branch }) }
           : { method: 'POST', headers: { 'X-Pulseboard-Request': '1' } },
+        65000,
       )
       if (result.status === 'queued' && result.buildId) {
         const queuedBranch = result.branch || branch
@@ -785,7 +789,7 @@ function App() {
   const teamCityComponents = integrations.teamcity?.components ?? []
   const knownTeamCityComponents = teamCityComponents.filter((component) => component.status !== 'unknown')
   const teamCityPendingDetail = knownTeamCityComponents.length
-    ? teamCityComponents.map((component) => `${component.label} ${component.status === 'unknown' ? 'unavailable' : `${component.pendingChanges}${component.truncated ? '+' : ''}`}`).join(' · ')
+    ? teamCityComponents.map((component) => `${component.label} ${component.status === 'unknown' ? 'unavailable' : `${component.pendingChanges}${component.truncated ? '+' : ''} changes${component.pendingBuilds?.length ? `, ${component.pendingBuilds.length} builds` : ''}`}`).join(' · ')
     : integrations.teamcity ? 'Build data unavailable' : 'Loading build activity...'
   const scheduledJobs = scheduledJobSummary?.jobs ?? []
   const activeScheduledJobs = scheduledJobs.filter((job) => job.status === 'scheduled' || job.status === 'running').length
@@ -999,17 +1003,21 @@ function App() {
                     const actionKey = componentBuildActionKey(component.key, teamCityReleaseBranch)
                     const isPending = pendingActions.includes(actionKey)
                     const pendingCount = `${component.pendingChanges}${component.truncated ? '+' : ''}`
+                    const pendingBuildCount = component.pendingBuilds?.length || 0
+                    const hasPending = component.pendingChanges > 0 || pendingBuildCount > 0
+                    const pendingDetails = [component.pendingChanges ? `${pendingCount} pending ${component.pendingChanges === 1 ? 'change' : 'changes'}` : '', pendingBuildCount ? `${pendingBuildCount} newer dependency ${pendingBuildCount === 1 ? 'build' : 'builds'}` : ''].filter(Boolean).join(' · ')
                     return <div className={`teamcity-component ${component.status}`} key={component.key}>
                       <div className="teamcity-component-main">
-                        <span className={`build-badge ${component.status === 'queued' || component.status === 'running' ? 'running' : component.pendingChanges ? 'pending' : component.status === 'unknown' ? 'unknown' : 'success'}`}>{component.status === 'queued' || component.status === 'running' ? '●' : component.pendingChanges ? '↑' : component.status === 'unknown' ? '!' : '✓'}</span>
+                        <span className={`build-badge ${component.status === 'queued' || component.status === 'running' ? 'running' : hasPending ? 'pending' : component.status === 'unknown' ? 'unknown' : 'success'}`}>{component.status === 'queued' || component.status === 'running' ? '●' : hasPending ? '↑' : component.status === 'unknown' ? '!' : '✓'}</span>
                         <div className="teamcity-component-copy">
                           {component.webUrl ? <a href={component.webUrl} target="_blank" rel="noopener noreferrer">{component.label}</a> : <strong>{component.label}</strong>}
-                          <small>{component.reason || (component.activeBuild ? `Build ${component.activeBuild.number || component.activeBuild.id || ''} ${component.activeBuild.state || 'active'}` : component.pendingChanges ? `${pendingCount} pending ${component.pendingChanges === 1 ? 'change' : 'changes'}` : `No pending changes · ${component.checkedConfigurations} ${component.checkedConfigurations === 1 ? 'configuration' : 'configurations'} checked`)}</small>
+                          <small>{component.reason || (component.activeBuild ? `Build ${component.activeBuild.number || component.activeBuild.id || ''} ${component.activeBuild.state || 'active'}` : hasPending ? pendingDetails : `No pending changes · ${component.checkedConfigurations} ${component.checkedConfigurations === 1 ? 'configuration' : 'configurations'} checked`)}</small>
                         </div>
                         {component.activeBuild?.webUrl && <a className="teamcity-active-link" href={component.activeBuild.webUrl} target="_blank" rel="noopener noreferrer">{component.activeBuild.state || 'active'}</a>}
                         {(component.canTrigger || isPending) && <button type="button" className="teamcity-trigger-button" disabled={isPending} onClick={() => void handleComponentBuild(component)}>{isPending ? 'Tracking...' : 'Trigger build'}</button>}
                       </div>
                       {component.pendingSources.length > 0 && <div className="teamcity-pending-sources">{component.pendingSources.map((source) => `${source.name} (${source.pendingChanges})`).join(' · ')}</div>}
+                      {!!component.pendingBuilds?.length && <div className="teamcity-pending-sources">Newer dependency builds: {component.pendingBuilds.map((build, index) => <span key={`${build.buildTypeId}:${build.id}`}>{index > 0 && ' · '}{build.webUrl ? <a href={build.webUrl} target="_blank" rel="noopener noreferrer">{build.name} #{build.number || build.id}</a> : `${build.name} #${build.number || build.id}`}{build.includedBuildIds.length > 0 && ` (included: ${build.includedBuildIds.join(', ')})`}</span>)}</div>}
                     </div>
                   }) : <div className="build-line"><span className="build-badge success">{integrations.teamcity?.status === 'unknown' ? '!' : '✓'}</span><div><strong>{integrations.teamcity?.reason || 'Loading build activity...'}</strong><small>{integrations.teamcity?.status || 'checking'}</small></div></div>}
                 </div>

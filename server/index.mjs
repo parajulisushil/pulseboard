@@ -314,6 +314,67 @@ async function getTeamCityPendingChanges(source, branch) {
   }
 }
 
+async function getLatestSuccessfulTeamCityBuild(buildTypeId, branch) {
+  const locator = encodeURIComponent(`buildType:(id:${buildTypeId}),branch:(name:${branch}),state:finished,status:SUCCESS,personal:false,count:1`)
+  const fields = encodeURIComponent('count,build(id,buildTypeId,branchName,startDate,finishDate,number,webUrl,snapshot-dependencies(count,nextHref,build(id,buildTypeId,branchName,startDate)))')
+  const data = await getTeamCityJson(`/app/rest/builds?locator=${locator}&fields=${fields}`)
+  if (!Array.isArray(data.build) && data.count !== 0) throw new Error('TeamCity returned an invalid build list')
+  const build = data.build?.[0]
+  if (build && build.branchName !== branch) throw new Error('TeamCity returned a build from a different branch')
+  return build
+}
+
+async function getTeamCitySnapshotBuilds(root) {
+  const snapshots = new Map()
+  const visited = new Set()
+  let frontier = [root]
+  while (frontier.length) {
+    const batch = [...new Map(frontier.filter((build) => !visited.has(String(build.id))).map((build) => [String(build.id), build])).values()]
+    frontier = []
+    for (const build of batch) {
+      if (!build.id || !build.buildTypeId) throw new Error('TeamCity snapshot details are incomplete')
+      visited.add(String(build.id))
+      if (visited.size > 100) throw new Error('Console build dependency chain is unexpectedly large')
+      if (!snapshots.has(build.buildTypeId)) snapshots.set(build.buildTypeId, [])
+      snapshots.get(build.buildTypeId).push(build)
+    }
+    const details = await Promise.all(batch.map(async (build) => {
+      if (build['snapshot-dependencies']) return build
+      const fields = encodeURIComponent('id,buildTypeId,branchName,startDate,snapshot-dependencies(count,nextHref,build(id,buildTypeId,branchName,startDate))')
+      return getTeamCityJson(`/app/rest/builds/id:${encodeURIComponent(build.id)}?fields=${fields}`)
+    }))
+    for (const build of details) {
+      const dependencies = build['snapshot-dependencies']
+      if (!dependencies || (dependencies.count > 0 && !Array.isArray(dependencies.build)) || dependencies.nextHref) throw new Error('TeamCity snapshot details are incomplete')
+      frontier.push(...(dependencies.build || []).filter((dependency) => !visited.has(String(dependency.id))))
+    }
+  }
+  return snapshots
+}
+
+async function getPendingTeamCityDependencyBuilds(configuration, branch, sources) {
+  const root = await getLatestSuccessfulTeamCityBuild(configuration.buildTypeId, branch)
+  if (!root) throw new Error(`No successful ${configuration.label} build found on ${branch}; dependency builds cannot be compared`)
+  const [snapshots, latestBuilds] = await Promise.all([
+    getTeamCitySnapshotBuilds(root),
+    Promise.all(sources.filter((source) => source.buildTypeId !== configuration.buildTypeId).map(async (source) => ({ source, build: await getLatestSuccessfulTeamCityBuild(source.buildTypeId, branch) }))),
+  ])
+  const pendingBuilds = []
+  for (const { source, build } of latestBuilds) {
+    if (!build) continue
+    const sourceSnapshots = snapshots.get(source.buildTypeId) || []
+    if (sourceSnapshots.some((snapshot) => !snapshot.branchName)) throw new Error(`Build branch unavailable for ${source.name}; dependency builds cannot be compared`)
+    const included = sourceSnapshots.filter((snapshot) => snapshot.branchName === branch)
+    if (included.some((snapshot) => String(snapshot.id) === String(build.id))) continue
+    const latestDate = normalizeTeamCityDate(build.startDate)
+    const includedDates = included.map((snapshot) => normalizeTeamCityDate(snapshot.startDate))
+    if (!latestDate || includedDates.some((date) => !date)) throw new Error(`Build dates unavailable for ${source.name}; dependency builds cannot be compared`)
+    if (includedDates.length && includedDates.some((date) => Date.parse(date) >= Date.parse(latestDate))) continue
+    pendingBuilds.push({ buildTypeId: source.buildTypeId, name: source.name, id: build.id, number: build.number, webUrl: build.webUrl, includedBuildIds: included.map((snapshot) => snapshot.id) })
+  }
+  return pendingBuilds
+}
+
 function aggregatePendingChangeSources(sources) {
   const uniqueChanges = new Set()
   const pendingSources = []
@@ -370,9 +431,10 @@ async function getTeamCityComponentActivity(configuration, branch) {
   try {
     let sources = [{ buildTypeId: configuration.buildTypeId, name: configuration.label, webUrl: fallbackUrl }]
     if (configuration.includeDependencies) sources = await getTeamCityDependencyGraph(configuration.buildTypeId)
-    const [sourceResults, builds] = await Promise.all([
+    const [sourceResults, builds, pendingBuilds] = await Promise.all([
       Promise.all(sources.map((source) => getTeamCityPendingChanges(source, branch))),
       getTeamCityActiveBuilds(configuration, branch, sources),
+      configuration.includeDependencies ? getPendingTeamCityDependencyBuilds(configuration, branch, sources) : Promise.resolve([]),
     ])
     const pending = aggregatePendingChangeSources(sourceResults)
     const activeBuild = builds[0]
@@ -383,10 +445,11 @@ async function getTeamCityComponentActivity(configuration, branch) {
       webUrl: sources.find((source) => source.buildTypeId === configuration.buildTypeId)?.webUrl || fallbackUrl,
       checkedConfigurations: sources.length,
       ...pending,
+      pendingBuilds,
       builds,
       activeBuild,
-      status: activeBuild?.state || (pending.pendingChanges > 0 ? 'pending' : 'current'),
-      canTrigger: pending.pendingChanges > 0 && !activeBuild,
+      status: activeBuild?.state || (pending.pendingChanges > 0 || pendingBuilds.length ? 'pending' : 'current'),
+      canTrigger: (pending.pendingChanges > 0 || pendingBuilds.length > 0) && !activeBuild,
     }
   } catch (error) {
     return {
@@ -397,6 +460,7 @@ async function getTeamCityComponentActivity(configuration, branch) {
       checkedConfigurations: 0,
       pendingChanges: 0,
       pendingSources: [],
+      pendingBuilds: [],
       builds: [],
       status: 'unknown',
       canTrigger: false,
@@ -413,14 +477,15 @@ async function getTeamCityBuild(selectedBranch) {
   const components = await Promise.all(teamCityComponentBuildTypes().map((configuration) => getTeamCityComponentActivity(configuration, branch)))
   const builds = components.flatMap((component) => component.builds.map((build) => ({ ...build, component: component.label })))
   const pendingChanges = components.reduce((total, component) => total + component.pendingChanges, 0)
+  const pendingBuilds = components.reduce((total, component) => total + component.pendingBuilds.length, 0)
   const failedComponents = components.filter((component) => component.status === 'unknown')
-  const status = builds.length ? 'running' : pendingChanges > 0 ? 'pending' : failedComponents.length === components.length ? 'unknown' : 'success'
+  const status = builds.length ? 'running' : pendingChanges > 0 || pendingBuilds > 0 ? 'pending' : failedComponents.length === components.length ? 'unknown' : 'success'
   const reason = failedComponents.length
     ? `Activity unavailable for ${failedComponents.map((component) => component.label).join(', ')}`
-    : pendingChanges > 0
-      ? `${pendingChanges} pending ${pendingChanges === 1 ? 'change' : 'changes'}`
+    : pendingChanges > 0 || pendingBuilds > 0
+      ? [pendingChanges ? `${pendingChanges} pending ${pendingChanges === 1 ? 'change' : 'changes'}` : '', pendingBuilds ? `${pendingBuilds} newer dependency ${pendingBuilds === 1 ? 'build' : 'builds'}` : ''].filter(Boolean).join(' · ')
       : 'No pending changes'
-  return { provider: 'TeamCity', status, reason, branch, pendingChanges, components, builds }
+  return { provider: 'TeamCity', status, reason, branch, pendingChanges, pendingBuilds, components, builds }
 }
 
 async function getTeamCityAgentInventory() {
@@ -1522,7 +1587,7 @@ const api = createServer(async (request, response) => {
       const activity = await getTeamCityComponentActivity(configuration, branch)
       if (activity.status === 'unknown') return send(response, 503, { error: activity.reason || `Unable to check pending ${configuration.label} changes` })
       if (activity.activeBuild) return send(response, 409, { error: `${configuration.label} already has a ${activity.activeBuild.state} build on ${branch}` })
-      if (!activity.pendingChanges) return send(response, 409, { error: `${configuration.label} has no pending changes on ${branch}` })
+      if (!activity.pendingChanges && !activity.pendingBuilds.length) return send(response, 409, { error: `${configuration.label} has no pending changes or newer dependency builds on ${branch}` })
 
       componentBuildActionLocks.set(actionKey, { startedAt: Date.now() })
       let result
@@ -1543,7 +1608,7 @@ const api = createServer(async (request, response) => {
         if (!result || result.status !== 'queued') componentBuildActionLocks.delete(actionKey)
       }
       if (result.status === 'queued') componentBuildActionLocks.set(actionKey, { buildId: result.buildId, startedAt: Date.now() })
-      const responseBody = { ...result, component: configuration.label, componentKey: configuration.key, branch, pendingChanges: activity.pendingChanges }
+      const responseBody = { ...result, component: configuration.label, componentKey: configuration.key, branch, pendingChanges: activity.pendingChanges, pendingBuilds: activity.pendingBuilds }
       log('info', 'component_build_requested', { requestId, component: configuration.label, branch, buildTypeId: configuration.buildTypeId, result: result.status, buildId: result.buildId })
       return send(response, result.status === 'queued' ? 202 : 503, responseBody)
     }
@@ -1751,6 +1816,7 @@ export {
   scheduledJobManager,
   serviceStatusTargets,
   getTeamCityBuildProgress,
+  getTeamCityComponentActivity,
   compareDeploymentBuilds,
   currentTeamCityBranch,
   extractVenioVersion,

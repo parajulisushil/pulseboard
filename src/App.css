@@ -48,3 +48,5 @@
 @media(max-width:1150px){.overview-page-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.overview-page-grid,.infrastructure-grid{grid-template-columns:1fr}.infrastructure-summary{align-items:flex-start;flex-direction:column}.infrastructure-summary p{text-align:left}}
 .infrastructure-storage{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);scroll-margin-top:80px}.infrastructure-storage .disk-heading{flex-wrap:wrap;gap:8px}.infrastructure-storage p{font:10px 'DM Mono';overflow-wrap:anywhere;white-space:normal}.infrastructure-storage small{color:var(--faint);font:9px 'DM Mono'}.infrastructure-storage .warning{color:var(--amber)}.infrastructure-storage .healthy{color:var(--green)}
+
+.teamcity-pending-sources a{color:var(--blue);text-decoration:none}.teamcity-pending-sources a:hover{text-decoration:underline}.teamcity-pending-sources a:focus-visible{outline:2px solid var(--green);outline-offset:2px}
