@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import mssql from 'mssql'
 
 const MAX_REQUEST_BYTES = 300 * 1024
 const MAX_SCRIPT_BYTES = 256 * 1024
@@ -53,6 +54,8 @@ export function scheduledJobTimeZone(value = process.env.SCHEDULED_JOB_TIME_ZONE
 }
 
 export function calculateNextRun(schedule, after = new Date(), timeZone = scheduledJobTimeZone()) {
+  if (schedule.type === 'manual') return null
+  if (schedule.type === 'interval') return new Date(after.getTime() + schedule.minutes * 60000).toISOString()
   if (schedule.type === 'once') {
     const value = new Date(schedule.runAt)
     return Number.isNaN(value.getTime()) || value <= after ? null : value.toISOString()
@@ -77,15 +80,18 @@ export function calculateNextRun(schedule, after = new Date(), timeZone = schedu
   return next.toISOString()
 }
 
-function validateRequest(input, now) {
+function validateRequest(input, now, previous) {
   if (!input || Array.isArray(input) || typeof input !== 'object') throw new ScheduledJobError(400, 'Request body must be a JSON object')
   const name = typeof input.name === 'string' ? input.name.trim() : ''
   if (!name || name.length > 100) throw new ScheduledJobError(400, 'Name is required and must be 100 characters or fewer')
-  if (!['python', 'powershell'].includes(input.language)) throw new ScheduledJobError(400, 'Language must be python or powershell')
-  if (!['path', 'inline'].includes(input.sourceMode)) throw new ScheduledJobError(400, 'Script source must be path or inline')
+  if (!['python', 'powershell', 'sql'].includes(input.language)) throw new ScheduledJobError(400, 'Job type must be python, powershell, or sql')
+  if (input.language !== 'sql' && !['path', 'inline'].includes(input.sourceMode)) throw new ScheduledJobError(400, 'Script source must be path or inline')
   let scriptPath
   let scriptContent
-  if (input.sourceMode === 'path') {
+  if (input.language === 'sql') {
+    scriptContent = typeof input.scriptContent === 'string' ? input.scriptContent : ''
+    if (!scriptContent.trim() || Buffer.byteLength(scriptContent) > MAX_SCRIPT_BYTES) throw new ScheduledJobError(400, 'A SQL query of at most 256 KB is required')
+  } else if (input.sourceMode === 'path') {
     scriptPath = typeof input.scriptPath === 'string' ? input.scriptPath.trim() : ''
     if (!scriptPath || scriptPath.length > 2048 || scriptPath.includes('\0')) throw new ScheduledJobError(400, 'A valid script path is required')
     const expected = input.language === 'python' ? '.py' : '.ps1'
@@ -96,11 +102,16 @@ function validateRequest(input, now) {
     if (Buffer.byteLength(scriptContent) > MAX_SCRIPT_BYTES) throw new ScheduledJobError(413, 'Script content is too large')
   }
   const schedule = input.schedule
-  if (!schedule || Array.isArray(schedule) || typeof schedule !== 'object' || !['once', 'hourly', 'daily', 'weekdays'].includes(schedule.type)) {
+  if (!schedule || Array.isArray(schedule) || typeof schedule !== 'object' || !['once', 'hourly', 'daily', 'weekdays', 'interval', 'manual'].includes(schedule.type)) {
     throw new ScheduledJobError(400, 'Schedule type must be once, hourly, daily, or weekdays')
   }
   let cleanSchedule
-  if (schedule.type === 'once') {
+  if (schedule.type === 'manual') {
+    cleanSchedule = { type: 'manual' }
+  } else if (schedule.type === 'interval') {
+    if (!Number.isInteger(schedule.minutes) || schedule.minutes < 1 || schedule.minutes > 10080) throw new ScheduledJobError(400, 'Interval must be between 1 and 10080 minutes')
+    cleanSchedule = { type: 'interval', minutes: schedule.minutes }
+  } else if (schedule.type === 'once') {
     const runAt = new Date(schedule.runAt)
     if (Number.isNaN(runAt.getTime()) || runAt <= now) throw new ScheduledJobError(400, 'The one-time run date must be in the future')
     cleanSchedule = { type: 'once', runAt: runAt.toISOString() }
@@ -111,7 +122,31 @@ function validateRequest(input, now) {
     if (typeof schedule.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.time)) throw new ScheduledJobError(400, 'Time must use HH:MM in 24-hour format')
     cleanSchedule = { type: schedule.type, time: schedule.time }
   }
-  return { name, language: input.language, sourceMode: input.sourceMode, ...(scriptPath ? { scriptPath } : { scriptContent }), schedule: cleanSchedule }
+  if (input.language !== 'sql') return { name, language: input.language, sourceMode: input.sourceMode, ...(scriptPath ? { scriptPath } : { scriptContent }), schedule: cleanSchedule }
+  const sql = input.sql || {}
+  const required = (value, label) => {
+    if (typeof value !== 'string' || !value.trim() || value.length > 512) throw new ScheduledJobError(400, `${label} is required and must be at most 512 characters`)
+    return value.trim()
+  }
+  const password = sql.password || (previous?.language === 'sql' ? previous.sql.password : '')
+  if (typeof password !== 'string' || !password || password.length > 512) throw new ScheduledJobError(400, 'SQL password is required and must be at most 512 characters')
+  const port = Number(sql.port || 1433)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new ScheduledJobError(400, 'SQL port must be between 1 and 65535')
+  const webhookType = sql.webhookType || 'none'
+  if (!['none', 'slack', 'discord'].includes(webhookType)) throw new ScheduledJobError(400, 'Invalid webhook type')
+  let webhookUrl = ''
+  if (webhookType !== 'none') {
+    webhookUrl = sql.webhookUrl || (previous?.sql?.webhookType === webhookType ? previous.sql.webhookUrl : '')
+    let url
+    try { url = new URL(webhookUrl) } catch { throw new ScheduledJobError(400, 'A valid webhook URL is required') }
+    const validHost = webhookType === 'slack' ? url.hostname === 'hooks.slack.com' : ['discord.com', 'discordapp.com'].includes(url.hostname)
+    if (url.protocol !== 'https:' || !validHost || url.port || url.username || url.password || (webhookType === 'slack' ? !url.pathname.startsWith('/services/') : !url.pathname.startsWith('/api/webhooks/'))) throw new ScheduledJobError(400, 'Use an official HTTPS Slack or Discord webhook URL')
+  }
+  return { name, language: 'sql', sourceMode: 'inline', scriptContent, schedule: cleanSchedule, sql: {
+    server: required(sql.server, 'Server'), database: required(sql.database, 'Database'), username: required(sql.username, 'Username'), password, port,
+    encrypt: sql.encrypt !== false, trustServerCertificate: sql.trustServerCertificate === true, webhookType, webhookUrl,
+  } }
+
 }
 
 export async function readScheduledJobRequest(request) {
@@ -128,10 +163,11 @@ export async function readScheduledJobRequest(request) {
 function publicJob(job) {
   const visible = { ...job }
   delete visible.scriptContent
+  if (visible.sql) { const { password, webhookUrl, ...safe } = visible.sql; visible.sql = { ...safe, hasPassword: Boolean(password), hasWebhook: Boolean(webhookUrl) } }
   return visible
 }
 
-function editableJob(job) { return { ...job } }
+function editableJob(job) { return { ...publicJob(job), scriptContent: job.scriptContent } }
 
 export function createScheduledJobManager(options) {
   const now = options.now || (() => new Date())
@@ -139,6 +175,7 @@ export function createScheduledJobManager(options) {
   const timeZone = () => scheduledJobTimeZone(options.timeZone?.() || process.env.SCHEDULED_JOB_TIME_ZONE || process.env.TZ || DEFAULT_TIME_ZONE)
   const running = new Map()
   const executing = new Set()
+  const sqlRequests = new Map()
   let timer
   let operation = Promise.resolve()
 
@@ -176,7 +213,7 @@ export function createScheduledJobManager(options) {
     for (const job of data.jobs) {
       if (job.scheduleTimeZone === configured) continue
       job.scheduleTimeZone = configured
-      if (job.status === 'scheduled' && job.schedule.type !== 'once') job.nextRunAt = calculateNextRun(job.schedule, current, configured)
+      if (job.status === 'scheduled' && !['once', 'manual', 'interval'].includes(job.schedule.type)) job.nextRunAt = calculateNextRun(job.schedule, current, configured)
       changed = true
     }
     return changed
@@ -190,6 +227,7 @@ export function createScheduledJobManager(options) {
   }
 
   async function execute(job) {
+    if (job.language === 'sql') return executeSql(job)
     let target = job.scriptPath
     let temporary
     if (job.sourceMode === 'inline') {
@@ -223,14 +261,59 @@ export function createScheduledJobManager(options) {
     }
   }
 
+  async function executeSql(job) {
+    const cfg = job.sql
+    const pool = (options.createSqlPool || ((config) => new mssql.ConnectionPool(config)))({
+      server: cfg.server, port: cfg.port, user: cfg.username, password: cfg.password, database: cfg.database,
+      connectionTimeout: 10000, requestTimeout: 30000, pool: { max: 1, min: 0 },
+      options: { encrypt: cfg.encrypt, trustServerCertificate: cfg.trustServerCertificate, appName: 'Pulseboard SQL job' },
+    })
+    let output = ''
+    try {
+      await pool.connect()
+      const request = pool.request()
+      sqlRequests.set(job.id, request)
+      request.stream = true
+      request.on('error', () => {})
+      let rows = 0; let truncated = false; let resultSets = 0
+      const append = (text) => { if (text.length > 14000 - output.length) truncated = true; output += text.slice(0, Math.max(0, 14000 - output.length)) }
+      request.on('recordset', (columns) => { resultSets++; append(`Result set ${resultSets}: ${Object.keys(columns).join(' | ')}\n`) })
+      request.on('row', (row) => {
+        rows++
+        if (rows > 100 || output.length >= 14000) { truncated = true; return }
+        const values = Object.values(row).map((value) => value == null ? 'NULL' : Buffer.isBuffer(value) ? '[binary]' : String(value).replace(/[\r\n]+/g, ' ').slice(0, 1000))
+        append(`${values.join(' | ')}\n`)
+      })
+      const result = await request.query(job.scriptContent)
+      output += `\n${rows} row(s) received${truncated ? ' (display limited to 100 rows / 14,000 characters)' : ''}.`
+      if (!resultSets && result?.rowsAffected?.length) output += ` Rows affected: ${result.rowsAffected.join(', ')}.`
+    } catch (error) {
+      return { ok: false, output, reason: `SQL execution failed${error?.code ? ` (${String(error.code).slice(0, 40)})` : ''}. Check the server, credentials, and query.` }
+    } finally {
+      sqlRequests.delete(job.id)
+      await pool.close().catch(() => {})
+    }
+    if (cfg.webhookType !== 'none') {
+      try {
+        const message = `SQL job: ${job.name}\n\`\`\`\n${output.slice(0, 1600).replace(/`{3}/g, "'''")}${output.length > 1600 ? "\n[Result shortened; see Pulseboard for more.]" : ""}\n\`\`\``
+        const response = await (options.fetch || fetch)(cfg.webhookUrl, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, redirect: 'error', signal: AbortSignal.timeout(10000),
+          body: JSON.stringify(cfg.webhookType === 'slack' ? { text: message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') } : { content: message, allowed_mentions: { parse: [] } }),
+        })
+        if (!response.ok) throw new Error('Delivery failed')
+      } catch { return { ok: false, output, reason: 'SQL query succeeded, but webhook delivery failed.' } }
+    }
+    return { ok: true, output }
+  }
+
   async function finish(id, result) {
     await exclusive(async () => {
       const data = await load(); const job = data.jobs.find((item) => item.id === id)
       if (!job) return
       const completedAt = now().toISOString()
       job.lastRunAt = completedAt; job.lastStatus = result.ok ? 'success' : 'failed'; job.lastOutput = result.output || ''; job.lastError = result.reason || null
-      job.status = job.schedule.type === 'once' ? 'completed' : 'scheduled'
-      job.nextRunAt = job.schedule.type === 'once' ? null : calculateNextRun(job.schedule, now(), job.scheduleTimeZone || timeZone())
+      job.status = ['once', 'manual'].includes(job.schedule.type) ? 'completed' : 'scheduled'
+      job.nextRunAt = ['once', 'manual'].includes(job.schedule.type) ? null : calculateNextRun(job.schedule, now(), job.scheduleTimeZone || timeZone())
       await save(data)
       options.audit?.('scheduled_job_completed', { jobId: job.id, name: job.name, status: job.lastStatus, reason: result.reason })
     })
@@ -250,8 +333,8 @@ export function createScheduledJobManager(options) {
       const data = await load(); const current = now(); const selected = []; const timeZoneChanged = applyTimeZone(data, current)
       for (const job of data.jobs) {
         if (job.status === 'running' && !executing.has(job.id)) {
-          job.status = job.schedule.type === 'once' ? 'completed' : 'scheduled'; job.lastStatus = 'failed'; job.lastError = 'Execution was interrupted by an API restart'; job.lastRunAt = current.toISOString()
-          job.nextRunAt = job.schedule.type === 'once' ? null : calculateNextRun(job.schedule, current, job.scheduleTimeZone || timeZone())
+          job.status = ['once', 'manual'].includes(job.schedule.type) ? 'completed' : 'scheduled'; job.lastStatus = 'failed'; job.lastError = 'Execution was interrupted by an API restart'; job.lastRunAt = current.toISOString()
+          job.nextRunAt = ['once', 'manual'].includes(job.schedule.type) ? null : calculateNextRun(job.schedule, current, job.scheduleTimeZone || timeZone())
         }
         if (job.status === 'scheduled' && job.nextRunAt && new Date(job.nextRunAt) <= current && !running.has(job.id)) {
           job.status = 'running'; job.lastError = null; executing.add(job.id); selected.push({ ...job })
@@ -284,11 +367,11 @@ export function createScheduledJobManager(options) {
     },
     async update(id, input, actor = 'unknown') {
       return exclusive(async () => {
-        const current = now(); const clean = validateRequest(input, current); await validateScriptPath(clean)
-        const data = await load(); const job = data.jobs.find((item) => item.id === id)
+        const current = now(); const data = await load(); const job = data.jobs.find((item) => item.id === id)
         if (!job) throw new ScheduledJobError(404, 'Scheduled job not found')
+        const clean = validateRequest(input, current, job); await validateScriptPath(clean)
         if (job.status === 'running' || executing.has(id)) throw new ScheduledJobError(409, 'A running job cannot be edited')
-        for (const key of ['name', 'language', 'sourceMode', 'scriptPath', 'scriptContent', 'schedule']) delete job[key]
+        for (const key of ['name', 'language', 'sourceMode', 'scriptPath', 'scriptContent', 'schedule', 'sql']) delete job[key]
         const configuredTimeZone = timeZone()
         Object.assign(job, clean, { scheduleTimeZone: configuredTimeZone, status: 'scheduled', nextRunAt: calculateNextRun(clean.schedule, current, configuredTimeZone), updatedAt: current.toISOString(), updatedBy: actor })
         await save(data); options.audit?.('scheduled_job_updated', { jobId: id, name: job.name, actor, schedule: job.schedule, language: job.language, sourceMode: job.sourceMode })
@@ -317,6 +400,6 @@ export function createScheduledJobManager(options) {
     async tick() { return tick() },
     timeZone,
     start() { if (!timer) { void tick(); timer = setInterval(() => void tick().catch((error) => options.audit?.('scheduled_job_tick_failed', { error: error.message })), 10000); timer.unref?.() } },
-    stop() { if (timer) clearInterval(timer); timer = undefined; for (const child of running.values()) child.kill() },
+    stop() { if (timer) clearInterval(timer); timer = undefined; for (const child of running.values()) child.kill(); for (const request of sqlRequests.values()) request.cancel() },
   }
 }
