@@ -27,6 +27,7 @@ function OpenMergeRequests({ autoRefreshSeconds }: { autoRefreshSeconds: number 
   const [lastRefresh, setLastRefresh] = useState('Not checked')
   const [branch, setBranch] = useState('')
   const [project, setProject] = useState('')
+  const [draft, setDraft] = useState('all')
   const [search, setSearch] = useState('')
   const request = useRef<AbortController | null>(null)
   const refresh = useCallback(async (force = false) => {
@@ -58,6 +59,7 @@ function OpenMergeRequests({ autoRefreshSeconds }: { autoRefreshSeconds: number 
   const projects = [...new Map(requests.map((mr) => [mr.projectId, mr.projectName])).entries()].sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))
   const searchTerm = search.trim().toLocaleLowerCase()
   const visible = requests.filter((mr) => (!branch || mr.targetBranch === branch) && (!project || mr.projectId === project)
+    && (draft === 'all' || (draft === 'draft' ? mr.draft : !mr.draft))
     && (!searchTerm || [mr.title, `!${mr.iid}`, String(mr.iid), mr.projectName, mr.author, mr.sourceBranch, mr.targetBranch, ...mr.assignees, ...mr.reviewers, ...mr.labels].some((value) => value?.toLocaleLowerCase().includes(searchTerm))))
   const grouped = new Map<string, Map<string, { name: string; requests: OpenMergeRequest[] }>>()
   for (const mr of visible) {
@@ -80,6 +82,7 @@ function OpenMergeRequests({ autoRefreshSeconds }: { autoRefreshSeconds: number 
       <div className="mr-filters" role="group" aria-label="Filter unmerged merge requests">
         <label>Target branch<select value={branch} onChange={(event) => setBranch(event.target.value)}><option value="">All branches</option>{branch && !branches.includes(branch) && <option value={branch}>{branch}</option>}{branches.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
         <label>Project<select value={project} onChange={(event) => setProject(event.target.value)}><option value="">All projects</option>{project && !projects.some(([id]) => id === project) && <option value={project}>Project {project}</option>}{projects.map(([id, name]) => <option key={id} value={id}>{name} ({id})</option>)}</select></label>
+        <label>Draft status<select value={draft} onChange={(event) => setDraft(event.target.value)}><option value="all">All requests</option><option value="draft">Drafts</option><option value="not-draft">Not drafts</option></select></label>
         <label className="mr-search">Search<input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Title, MR, or person" /></label>
       </div>
       {error && <p className="approval-error" role="alert">{error} Displayed requests may be out of date.</p>}
