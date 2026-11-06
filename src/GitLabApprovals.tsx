@@ -1,19 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiRequest } from './api'
+import AIReviewDisplay, { type AIReview } from './AIReviewDisplay'
 import { currentRefreshTime, refreshTimeLabel, refreshTimeTitle } from './refreshTime'
 import './GitLabApprovals.css'
 
 type Approver = { id: number; name: string; username: string }
-type CriticalSuggestion = { title: string; explanation: string; file: string; line: number | null }
-type AIReview = {
-  status: 'reviewed' | 'unavailable' | 'skipped'
-  provider?: 'openai' | 'groq'
-  providerName?: string
-  model?: string
-  criticalSuggestions: CriticalSuggestion[]
-  incomplete?: boolean
-  reason?: string
-}
 type MergeRequest = {
   projectId: string
   projectName: string
@@ -176,16 +167,7 @@ export default function GitLabApprovals({ autoRefreshSeconds, refreshKey, onNoti
               <p className="approval-meta">{mr.projectName} · {mr.author} · <span>{mr.sourceBranch} → {mr.targetBranch}</span>{mr.sha && <> · <code>{mr.sha.slice(0, 8)}</code></>}</p>
               <p className="approval-meta positive">Normal approval complete</p>
               <p className="approval-rules">{mr.rules.map((rule) => `${rule.name}: ${rule.approved}/${rule.required} approvals`).join(' · ')}</p>
-              <div className={`ai-review ${mr.aiReview.criticalSuggestions.length ? 'has-critical' : ''}`}>
-                <strong>AI review{mr.aiReview.providerName ? ` · ${mr.aiReview.providerName}` : ''}</strong>
-                {mr.aiReview.status === 'skipped' && <p>{mr.aiReview.reason || 'AI review skipped.'}</p>}
-                {mr.aiReview.status === 'unavailable' && <p>{mr.aiReview.reason || 'AI review unavailable.'}</p>}
-                {mr.aiReview.status === 'reviewed' && !mr.aiReview.criticalSuggestions.length && <p>No critical suggestions found.{mr.aiReview.incomplete ? ' Review coverage is incomplete.' : ''}</p>}
-                {!!mr.aiReview.criticalSuggestions.length && <ul>{mr.aiReview.criticalSuggestions.map((suggestion, index) => (
-                  <li key={`${suggestion.file}:${suggestion.line}:${index}`}><strong>{suggestion.title}</strong><span>{suggestion.file}{suggestion.line ? `:${suggestion.line}` : ''}</span><p>{suggestion.explanation}</p></li>
-                ))}</ul>}
-                {mr.aiReview.criticalSuggestions.length > 0 && mr.aiReview.reason && <p>{mr.aiReview.reason}</p>}
-              </div>
+              <AIReviewDisplay review={mr.aiReview} />
               {mr.reason && <p className="approval-reason">{mr.reason}</p>}
               {actionErrors[mergeRequestKey(mr)] && <p className="approval-error" role="alert">{actionErrors[mergeRequestKey(mr)]}</p>}
             </div>

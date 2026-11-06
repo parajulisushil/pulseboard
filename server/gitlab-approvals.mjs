@@ -11,11 +11,17 @@ export class GitLabApprovalError extends Error {
   }
 }
 
-function configuration() {
+function connectionSettings() {
   const url = value('GITLAB_URL')?.replace(/\/$/, '')
   const token = value('GITLAB_APPROVAL_TOKEN') || value('GITLAB_TOKEN')
+  if (!url || !token) throw new GitLabApprovalError('Configure GITLAB_URL and a GitLab token to check merge requests.')
+  return { url, token }
+}
+
+function configuration() {
+  const { url, token } = connectionSettings()
   const projectIds = value('GITLAB_APPROVAL_PROJECT_IDS')
-  if (!url || !token || !projectIds) throw new GitLabApprovalError('Configure GITLAB_APPROVAL_PROJECT_IDS with the GitLab project IDs to check.')
+  if (!projectIds) throw new GitLabApprovalError('Configure GITLAB_APPROVAL_PROJECT_IDS with the GitLab project IDs to check.')
   const projects = [...new Set(projectIds.split(',').map((id) => id.trim()))]
   if (projects.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) {
     throw new GitLabApprovalError('GITLAB_APPROVAL_PROJECT_IDS must contain comma-separated numeric project IDs.')
@@ -115,6 +121,7 @@ function prepareDiffForReview(diffs, hasMorePages) {
 
 async function aiReview(config, mr, signal) {
   const settings = aiReviewSettings()
+  if (!/^[a-f0-9]{40,64}$/i.test(mr.sha || '')) return { status: 'unavailable', criticalSuggestions: [], reason: 'The latest commit is unavailable. Refresh to review this merge request.' }
   if (settings.error) return { status: 'unavailable', criticalSuggestions: [], reason: settings.error }
   const key = `${config.url}:${config.project}:${mr.iid}:${mr.sha}:${settings.provider}:${settings.model}`
   let cached = aiReviewCache.get(key)
@@ -223,6 +230,53 @@ export async function listGitLabApprovals({ includeAiReview = true } = {}) {
     codeFreezeApplied: value('CODE_FREEZE_APPLIED')?.toLowerCase() === 'true',
     mergeRequests, warnings, checkedAt: new Date().toISOString(),
   }
+}
+
+// GitLab applies the assignment scope to the authenticated token owner across accessible projects.
+export async function listAssignedGitLabMergeRequests() {
+  let user
+  const mergeRequests = []
+  const warnings = []
+  const signal = AbortSignal.timeout(60000)
+  try {
+    const config = connectionSettings()
+    user = publicUser((await requestGitLab(config, '/user', { signal })).data)
+    const seen = new Set()
+    let page = 1
+    while (page) {
+      const query = new URLSearchParams({ state: 'opened', scope: 'assigned_to_me', per_page: '100', page: String(page), order_by: 'updated_at', sort: 'desc' })
+      const { data, nextPage } = await requestGitLab(config, `/merge_requests?${query}`, { signal })
+      if (!Array.isArray(data)) throw new GitLabApprovalError('GitLab returned an invalid assigned merge request list.')
+      const candidates = data.filter((mr) => {
+        const key = `${mr.project_id}:${mr.iid}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return mr.state === 'opened' && Number.isSafeInteger(mr.project_id) && mr.project_id > 0 && Number.isSafeInteger(mr.iid) && mr.iid > 0
+      })
+      let index = 0
+      await Promise.all(Array.from({ length: Math.min(4, candidates.length) }, async () => {
+        while (index < candidates.length) {
+          const mr = candidates[index++]
+          const projectId = String(mr.project_id)
+          const review = await aiReview({ ...config, project: projectId }, mr, signal)
+          mergeRequests.push({
+            projectId, projectName: mr.references?.full?.replace(/!\d+$/, '') || `Project ${projectId}`,
+            iid: mr.iid, title: mr.title, webUrl: mr.web_url, sha: mr.sha,
+            author: mr.author?.name || mr.author?.username || 'Unknown author',
+            sourceBranch: mr.source_branch, targetBranch: mr.target_branch, updatedAt: mr.updated_at,
+            draft: Boolean(mr.draft || mr.work_in_progress), aiReview: review,
+          })
+        }
+      }))
+      const followingPage = nextPage === null ? (data.length === 100 ? page + 1 : 0) : Number(nextPage)
+      if (!Number.isSafeInteger(followingPage) || followingPage < 0 || (followingPage && (followingPage <= page || !candidates.length))) throw new GitLabApprovalError('GitLab pagination could not be completed.')
+      page = followingPage
+    }
+  } catch (error) {
+    warnings.push(error instanceof Error ? error.message : 'Unable to load assigned merge requests.')
+  }
+  mergeRequests.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0) || Number(a.projectId) - Number(b.projectId) || b.iid - a.iid)
+  return { status: warnings.length ? (mergeRequests.length ? 'partial' : 'unknown') : 'available', user, mergeRequests, warnings, checkedAt: new Date().toISOString() }
 }
 
 // This list is independent of approval rules and the optional approval target-branch filter.

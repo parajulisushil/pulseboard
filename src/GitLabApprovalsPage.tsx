@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiRequest } from './api'
 import { currentRefreshTime, refreshTimeLabel, refreshTimeTitle } from './refreshTime'
 import GitLabApprovals from './GitLabApprovals'
+import AssignedMergeRequests from './AssignedMergeRequests'
 import './GitLabApprovals.css'
 
 type OpenMergeRequest = {
@@ -115,6 +116,6 @@ export default function GitLabApprovalsPage({ autoRefreshSeconds, onNotice }: Pr
       <button type="button" className={view === 'approvals' ? 'selected' : ''} aria-pressed={view === 'approvals'} onClick={() => setView('approvals')}>Approvals</button>
       <button type="button" className={view === 'mergeRequests' ? 'selected' : ''} aria-pressed={view === 'mergeRequests'} onClick={() => setView('mergeRequests')}>Unmerged merge requests</button>
     </div>
-    {view === 'approvals' ? <GitLabApprovals autoRefreshSeconds={autoRefreshSeconds} refreshKey={0} onNotice={onNotice} /> : <OpenMergeRequests autoRefreshSeconds={autoRefreshSeconds} />}
+    {view === 'approvals' ? <><GitLabApprovals autoRefreshSeconds={autoRefreshSeconds} refreshKey={0} onNotice={onNotice} /><AssignedMergeRequests autoRefreshSeconds={autoRefreshSeconds} /></> : <OpenMergeRequests autoRefreshSeconds={autoRefreshSeconds} />}
   </>
 }

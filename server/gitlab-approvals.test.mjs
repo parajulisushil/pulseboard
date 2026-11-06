@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import test from 'node:test'
-import { approveGitLabMergeRequest, getGitLabApprovalSummary, listGitLabApprovals, listOpenGitLabMergeRequests, pendingApprovalRules } from './gitlab-approvals.mjs'
+import { approveGitLabMergeRequest, getGitLabApprovalSummary, listAssignedGitLabMergeRequests, listGitLabApprovals, listOpenGitLabMergeRequests, pendingApprovalRules } from './gitlab-approvals.mjs'
 import { api } from './index.mjs'
 
 const sha = 'a'.repeat(40)
@@ -65,6 +65,54 @@ function defaultResponse(call) {
   if (call.url.pathname.endsWith('/merge_requests')) return { body: [mr], headers: { 'X-Next-Page': '' } }
   return { body: mr }
 }
+
+test('reviews assigned requests across projects and branches, including drafts, and reuses cached reviews', async (context) => {
+  const calls = await fakeGitLab(context, (call) => {
+    if (call.url.pathname === '/api/v4/merge_requests') {
+      const page = call.url.searchParams.get('page')
+      return page === '1'
+        ? { body: [{ ...mr, project_id: 21, draft: true }], headers: { 'X-Next-Page': '2' } }
+        : { body: [{ ...mr, iid: 2, project_id: 99, target_branch: 'main' }], headers: { 'X-Next-Page': '' } }
+    }
+    if (call.url.pathname.endsWith('/diffs')) return { body: [{ old_path: 'app.js', new_path: 'app.js', diff: '+change' }], headers: { 'X-Next-Page': '' } }
+    return defaultResponse(call)
+  })
+  process.env.GITLAB_APPROVAL_TARGET_BRANCH = 'release/11.8.5'
+  process.env.OPENAI_API_KEY = 'test-key'
+  const originalFetch = globalThis.fetch
+  let providerCalls = 0
+  globalThis.fetch = (url, options) => {
+    if (String(url) === 'https://api.openai.com/v1/responses') {
+      providerCalls++
+      return Promise.resolve(Response.json({ status: 'completed', output_text: JSON.stringify({ criticalSuggestions: [{ title: 'Issue', explanation: 'Impact', file: 'app.js', line: 1 }] }) }))
+    }
+    return originalFetch(url, options)
+  }
+  context.after(() => { globalThis.fetch = originalFetch })
+  const result = await listAssignedGitLabMergeRequests()
+  assert.equal(result.status, 'available')
+  assert.deepEqual(result.mergeRequests.map((item) => [item.projectId, item.iid, item.draft, item.aiReview.status]), [['21', 1, true, 'reviewed'], ['99', 2, false, 'reviewed']])
+  assert.equal(result.mergeRequests[0].aiReview.criticalSuggestions[0].title, 'Issue')
+  assert.equal(providerCalls, 2)
+  await listAssignedGitLabMergeRequests()
+  assert.equal(providerCalls, 2)
+  assert.equal(calls.filter((call) => call.url.pathname.endsWith('/diffs')).length, 2)
+  const queries = calls.filter((call) => call.url.pathname === '/api/v4/merge_requests')
+  assert(queries.every((call) => call.url.searchParams.get('scope') === 'assigned_to_me' && !call.url.searchParams.has('target_branch')))
+})
+
+test('reports partial assigned results on pagination failure and unavailable review without a commit', async (context) => {
+  await fakeGitLab(context, (call) => {
+    if (call.url.pathname === '/api/v4/merge_requests') return call.url.searchParams.get('page') === '1'
+      ? { body: [{ ...mr, sha: null }], headers: { 'X-Next-Page': '2' } }
+      : { status: 403 }
+    return defaultResponse(call)
+  })
+  const result = await listAssignedGitLabMergeRequests()
+  assert.equal(result.status, 'partial')
+  assert.match(result.warnings[0], /denied/)
+  assert.match(result.mergeRequests[0].aiReview.reason, /commit is unavailable/)
+})
 
 test('requires an outstanding eligible rule and excludes already approved or disallowed users', () => {
   assert.equal(pendingApprovalRules(ruleState(rule), approvals, user.id).length, 1)
@@ -332,6 +380,7 @@ test('approval routes require authentication, request verification, and a valid 
   const headers = { Authorization: `Basic ${Buffer.from('operator:test-password-long-enough').toString('base64')}`, 'Content-Type': 'application/json' }
   assert.equal((await fetch(`${base}/api/gitlab/approvals`)).status, 401)
   assert.equal((await fetch(`${base}/api/gitlab/merge-requests`)).status, 401)
+  assert.equal((await fetch(`${base}/api/gitlab/assigned-merge-requests`)).status, 401)
   const endpoint = `${base}/api/gitlab/merge-requests/1/approve`
   assert.equal((await fetch(endpoint, { method: 'POST' })).status, 401)
   assert.equal((await fetch(endpoint, { method: 'POST', headers })).status, 403)
@@ -341,6 +390,8 @@ test('approval routes require authentication, request verification, and a valid 
   assert.equal(calls.length, 0)
   const list = await fetch(`${base}/api/gitlab/approvals`, { headers })
   assert.equal((await list.json()).mergeRequests.length, 1)
+  const assigned = await fetch(`${base}/api/gitlab/assigned-merge-requests`, { headers })
+  assert.equal((await assigned.json()).mergeRequests.length, 1)
   const openList = await fetch(`${base}/api/gitlab/merge-requests`, { headers })
   assert.equal((await openList.json()).mergeRequests.length, 1)
   const summary = await fetch(`${base}/api/gitlab/approval-summary`, { headers })

@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { approveGitLabMergeRequest, getGitLabApprovalSummary, GitLabApprovalError, listGitLabApprovals, listOpenGitLabMergeRequests, readApprovalRequest } from './gitlab-approvals.mjs'
+import { approveGitLabMergeRequest, getGitLabApprovalSummary, GitLabApprovalError, listAssignedGitLabMergeRequests, listGitLabApprovals, listOpenGitLabMergeRequests, readApprovalRequest } from './gitlab-approvals.mjs'
 import { approvalNotificationSettings, createApprovalNotifier } from './approval-notifications.mjs'
 import { createStorageMonitor, storageNotificationSettings } from './storage-monitor.mjs'
 import { adPasswords, AdPasswordError, readAdResetRequest } from './ad-passwords.mjs'
@@ -1526,6 +1526,9 @@ const api = createServer(async (request, response) => {
     if (request.method === 'POST' && parts.length === 4 && parts[0] === 'api' && parts[1] === 'deployment-schedules' && parts[3] === 'cancel') {
       if (request.headers['x-pulseboard-request'] !== '1') return send(response, 403, { error: 'Missing request verification header' })
       return send(response, 200, await deploymentScheduler.cancel(parts[2], configuredValue('DASHBOARD_USERNAME') || 'development'))
+    }
+    if (request.method === 'GET' && requestUrl.pathname === '/api/gitlab/assigned-merge-requests') {
+      return send(response, 200, await listAssignedGitLabMergeRequests())
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/gitlab/approvals') {
       return send(response, 200, await listGitLabApprovals())
