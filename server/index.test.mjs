@@ -328,6 +328,9 @@ test('serves health checks and protects API routes', async (context) => {
   assert.match(unauthorized.headers.get('www-authenticate') || '', /^Basic /)
   assert.equal(unauthorized.headers.has('access-control-allow-origin'), false)
 
+  assert.equal((await fetch(`${baseUrl}/api/ec2-schedules`)).status, 401)
+  assert.equal((await fetch(`${baseUrl}/api/ec2-schedules/Dev`, { method: 'PUT', headers: { Authorization: authorization } })).status, 403)
+  assert.equal((await fetch(`${baseUrl}/api/ec2-schedules/Dev`, { method: 'DELETE', headers: { Authorization: authorization } })).status, 403)
   assert.equal((await fetch(`${baseUrl}/api/scheduled-jobs`)).status, 401)
   assert.equal((await fetch(`${baseUrl}/api/scheduled-jobs`, { method: 'POST', headers: { Authorization: authorization } })).status, 403)
   const jobList = await fetch(`${baseUrl}/api/scheduled-jobs`, { headers: { Authorization: authorization } })

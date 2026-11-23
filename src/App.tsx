@@ -6,6 +6,7 @@ import GitLabApprovalsPage from './GitLabApprovalsPage'
 import AdPasswords from './AdPasswords'
 import DeploymentControls from './DeploymentControls'
 import ScheduledJobs from './ScheduledJobs'
+import Ec2Schedule from './Ec2Schedule'
 import EnvironmentSettings from './EnvironmentSettings'
 import './App.css'
 
@@ -937,6 +938,7 @@ function App() {
                     </button>
                   </div>
                 })()}
+                {server.ec2ControlEnabled && server.instanceId && <Ec2Schedule serverName={server.name} instanceId={server.instanceId} />}
               </article>)}
             </div>
           </section>)}

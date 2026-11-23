@@ -14,6 +14,7 @@ import { createScheduledJobManager, readScheduledJobRequest, ScheduledJobError }
 import { readRecentSqlError, sqlErrorChecksEnabled } from './sql-errors.mjs'
 import { createInfrastructureMonitor, pingHost, readInfrastructureInventory } from './infrastructure-status.mjs'
 import { controlEc2Instance, ec2ControlEnabled, validateEc2ControlConfig } from './ec2-control.mjs'
+import { createEc2Scheduler, Ec2ScheduleError } from './ec2-schedules.mjs'
 import { checkEnvironment, createEnvironmentStore, EnvironmentError, readEnvironmentRequest } from './environment.mjs'
 
 const root = path.dirname(fileURLToPath(import.meta.url))
@@ -76,6 +77,21 @@ const scheduledJobManager = createScheduledJobManager({
   pythonCommand: () => process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python.exe' : 'python3'),
   timeoutMs: () => Number.parseInt(process.env.SCHEDULED_JOB_TIMEOUT_MS || '900000', 10),
   audit: (message, details) => log(details?.status === 'failed' || message.endsWith('_failed') ? 'warn' : 'info', message, details),
+})
+
+const ec2Scheduler = createEc2Scheduler({
+  filePath: () => path.resolve(projectRoot, process.env.EC2_SCHEDULE_PATH || 'data/ec2-schedules.json'),
+  timeZone: () => process.env.SCHEDULED_JOB_TIME_ZONE || process.env.TZ || 'Asia/Kathmandu',
+  getServer: async (name) => (await readInfrastructureInventory(infrastructureInventoryPath)).find((server) => server.name === name),
+  execute: async (server, action) => {
+    if (!ec2ControlEnabled()) throw new Error('EC2 instance control is disabled')
+    const key = server.instanceId.toLowerCase()
+    if ((infrastructureActionLocks.get(key) || 0) > Date.now()) throw new Error('Another EC2 action is in progress')
+    infrastructureActionLocks.set(key, Infinity)
+    try { const result = await controlEc2Instance(server.instanceId, action); infrastructureActionLocks.set(key, Date.now() + 15000); return result }
+    catch (error) { infrastructureActionLocks.delete(key); throw error }
+  },
+  audit: (message, details) => log(message.endsWith('_failed') || details?.status === 'failed' ? 'warn' : 'info', message, details),
 })
 
 const contentTypes = {
@@ -1414,11 +1430,12 @@ const api = createServer(async (request, response) => {
       const actionKey = server.instanceId.toLowerCase()
       const lockedUntil = infrastructureActionLocks.get(actionKey) || 0
       if (lockedUntil > Date.now()) {
-        return send(response, 409, { error: 'An EC2 action is already in progress; retry shortly' }, { 'Retry-After': String(Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000))) })
+        return send(response, 409, { error: 'An EC2 action is already in progress; retry shortly' }, { 'Retry-After': String(Number.isFinite(lockedUntil) ? Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000)) : 15) })
       }
-      infrastructureActionLocks.set(actionKey, Date.now() + 15000)
+      infrastructureActionLocks.set(actionKey, Infinity)
       try {
         const result = await controlEc2Instance(server.instanceId, parts[3])
+        infrastructureActionLocks.set(actionKey, Date.now() + 15000)
         log('info', 'ec2_action_requested', { requestId, server: server.name, instanceId: server.instanceId, action: parts[3], result: result.status })
         return send(response, 202, { ...result, machine: server.name })
       } catch (error) {
@@ -1489,6 +1506,18 @@ const api = createServer(async (request, response) => {
         if (request.method === 'POST') log('warn', 'ad_password_reset_failed', { requestId, status })
         return send(response, status, { error: error instanceof AdPasswordError ? error.message : 'The AD operation could not be completed.' })
       }
+    }
+    if (request.method === 'GET' && requestUrl.pathname === '/api/ec2-schedules') {
+      return send(response, 200, await ec2Scheduler.list())
+    }
+    if (parts.length === 3 && parts[0] === 'api' && parts[1] === 'ec2-schedules' && ['PUT', 'DELETE'].includes(request.method)) {
+      if (request.headers['x-pulseboard-request'] !== '1') return send(response, 403, { error: 'Missing request verification header' })
+      const name = decodePathPart(parts[2])
+      if (name === undefined) return send(response, 400, { error: 'Invalid server name' })
+      const actor = configuredValue('DASHBOARD_USERNAME') || 'development'
+      if (request.method === 'DELETE') return send(response, 200, await ec2Scheduler.remove(name, actor))
+      if (!ec2ControlEnabled()) return send(response, 503, { error: 'EC2 instance control is disabled' })
+      return send(response, 200, await ec2Scheduler.put(name, await readScheduledJobRequest(request), actor))
     }
     if (request.method === 'GET' && requestUrl.pathname === '/api/deployment-schedules') {
       return send(response, 200, { schedules: await deploymentScheduler.list(requestUrl.searchParams.get('server') || undefined) })
@@ -1687,7 +1716,7 @@ const api = createServer(async (request, response) => {
       const actionKey = serviceStatusKey(server.name, service.name)
       const lockedUntil = serviceActionLocks.get(actionKey) || 0
       if (lockedUntil > Date.now()) {
-        return send(response, 409, { error: 'A service action is already in progress; retry shortly' }, { 'Retry-After': String(Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000))) })
+        return send(response, 409, { error: 'A service action is already in progress; retry shortly' }, { 'Retry-After': String(Number.isFinite(lockedUntil) ? Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000)) : 15) })
       }
       serviceActionLocks.set(actionKey, Date.now() + 15000)
       let result
@@ -1713,7 +1742,7 @@ const api = createServer(async (request, response) => {
       const actionKey = serviceStatusKey(server.name, 'IIS')
       const lockedUntil = serviceActionLocks.get(actionKey) || 0
       if (lockedUntil > Date.now()) {
-        return send(response, 409, { error: 'An IIS restart is already in progress; retry shortly' }, { 'Retry-After': String(Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000))) })
+        return send(response, 409, { error: 'An IIS restart is already in progress; retry shortly' }, { 'Retry-After': String(Number.isFinite(lockedUntil) ? Math.max(1, Math.ceil((lockedUntil - Date.now()) / 1000)) : 15) })
       }
       serviceActionLocks.set(actionKey, Date.now() + 15000)
       let result
@@ -1733,7 +1762,7 @@ const api = createServer(async (request, response) => {
   } catch (error) {
     if (error instanceof EnvironmentError) return send(response, error.status, { error: error.message })
     if (error instanceof DeploymentScheduleError) return send(response, error.status, { error: error.message })
-    if (error instanceof ScheduledJobError) return send(response, error.status, { error: error.message })
+    if (error instanceof ScheduledJobError || error instanceof Ec2ScheduleError) return send(response, error.status, { error: error.message })
     log('error', 'request_failed', { requestId, error: error instanceof Error ? error.message : String(error) })
     return send(response, 500, { error: 'Internal server error', requestId })
   }
@@ -1764,6 +1793,7 @@ function startServer() {
   return api.listen(port, host, () => {
     deploymentScheduler.start()
     scheduledJobManager.start()
+    ec2Scheduler.start()
     approvalNotifier.start()
     storageMonitor.start()
     log('info', 'server_started', { host, port, nodeEnv: process.env.NODE_ENV || 'development', authMode: authenticationMode() })
@@ -1775,6 +1805,7 @@ function shutdown(signal, exitWhenClosed = false) {
   shuttingDown = true
   deploymentScheduler.stop()
   scheduledJobManager.stop()
+  ec2Scheduler.stop()
   approvalNotifier.stop()
   storageMonitor.stop()
   log('info', 'server_stopping', { signal })
