@@ -258,13 +258,40 @@ function teamCityRequestHeaders() {
   return { Accept: 'application/json', Authorization: `Bearer ${process.env.TEAMCITY_TOKEN}` }
 }
 
-async function getTeamCityJson(relativeUrl) {
-  const response = await fetch(`${process.env.TEAMCITY_URL.replace(/\/$/, '')}${relativeUrl}`, {
-    headers: teamCityRequestHeaders(),
-    signal: AbortSignal.timeout(10000),
-  })
-  if (!response.ok) throw new Error(`TeamCity returned ${response.status}`)
-  return response.json()
+const teamCityRequestTimeoutMs = 10000
+
+async function getTeamCityJson(relativeUrl, context = {}) {
+  try {
+    const response = await fetch(`${process.env.TEAMCITY_URL.replace(/\/$/, '')}${relativeUrl}`, {
+      headers: teamCityRequestHeaders(),
+      signal: AbortSignal.timeout(teamCityRequestTimeoutMs),
+    })
+    if (!response.ok) {
+      const error = new Error(`TeamCity returned ${response.status}`)
+      error.teamCityDetails = { ...context, type: 'HTTP error', httpStatus: response.status }
+      throw error
+    }
+    try {
+      return await response.json()
+    } catch (cause) {
+      if (cause?.name === 'TimeoutError' || cause?.name === 'AbortError') throw cause
+      const error = new Error('TeamCity returned an invalid JSON response')
+      error.teamCityDetails = { ...context, type: 'Invalid response' }
+      throw error
+    }
+  } catch (error) {
+    if (error?.teamCityDetails) throw error
+    const timeout = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+    const wrapped = new Error(timeout ? `TeamCity request timed out after ${teamCityRequestTimeoutMs / 1000} seconds` : 'Unable to connect to TeamCity')
+    const code = error?.cause?.code
+    wrapped.teamCityDetails = {
+      ...context,
+      type: timeout ? 'Timeout' : 'Connection error',
+      ...(timeout ? { timeoutMs: teamCityRequestTimeoutMs } : {}),
+      ...(!timeout && typeof code === 'string' && /^[A-Z0-9_]{1,40}$/.test(code) ? { code } : {}),
+    }
+    throw wrapped
+  }
 }
 
 function teamCityBuildTypeUrl(buildTypeId, branch) {
@@ -280,7 +307,7 @@ function teamCitySourceName(buildType) {
 async function getTeamCityBuildTypeDetails(buildTypeId) {
   const locator = encodeURIComponent(`id:${buildTypeId}`)
   const fields = encodeURIComponent('id,name,projectName,projectId,webUrl,snapshot-dependencies(snapshot-dependency(source-buildType(id,name,projectName,projectId,webUrl)))')
-  const data = await getTeamCityJson(`/app/rest/buildTypes/${locator}?fields=${fields}`)
+  const data = await getTeamCityJson(`/app/rest/buildTypes/${locator}?fields=${fields}`, { operation: 'Read build configuration dependencies', buildTypeId })
   const dependencies = (data['snapshot-dependencies']?.['snapshot-dependency'] || [])
     .map((dependency) => dependency['source-buildType'])
     .filter((dependency) => dependency?.id)
@@ -321,7 +348,7 @@ async function getTeamCityDependencyGraph(buildTypeId) {
 async function getTeamCityPendingChanges(source, branch) {
   const locator = encodeURIComponent(`buildType:(id:${source.buildTypeId}),pending:true,branch:(name:${branch}),count:1000`)
   const fields = encodeURIComponent('count,nextHref,change(id,version,date,username,webUrl)')
-  const data = await getTeamCityJson(`/app/rest/changes?locator=${locator}&fields=${fields}`)
+  const data = await getTeamCityJson(`/app/rest/changes?locator=${locator}&fields=${fields}`, { operation: 'Read pending changes', buildTypeId: source.buildTypeId })
   return {
     ...source,
     changes: data.change || [],
@@ -333,7 +360,7 @@ async function getTeamCityPendingChanges(source, branch) {
 async function getLatestSuccessfulTeamCityBuild(buildTypeId, branch) {
   const locator = encodeURIComponent(`buildType:(id:${buildTypeId}),branch:(name:${branch}),state:finished,status:SUCCESS,personal:false,count:1`)
   const fields = encodeURIComponent('count,build(id,buildTypeId,branchName,startDate,finishDate,number,webUrl,snapshot-dependencies(count,nextHref,build(id,buildTypeId,branchName,startDate)))')
-  const data = await getTeamCityJson(`/app/rest/builds?locator=${locator}&fields=${fields}`)
+  const data = await getTeamCityJson(`/app/rest/builds?locator=${locator}&fields=${fields}`, { operation: 'Read latest successful build', buildTypeId })
   if (!Array.isArray(data.build) && data.count !== 0) throw new Error('TeamCity returned an invalid build list')
   const build = data.build?.[0]
   if (build && build.branchName !== branch) throw new Error('TeamCity returned a build from a different branch')
@@ -357,7 +384,7 @@ async function getTeamCitySnapshotBuilds(root) {
     const details = await Promise.all(batch.map(async (build) => {
       if (build['snapshot-dependencies']) return build
       const fields = encodeURIComponent('id,buildTypeId,branchName,startDate,snapshot-dependencies(count,nextHref,build(id,buildTypeId,branchName,startDate))')
-      return getTeamCityJson(`/app/rest/builds/id:${encodeURIComponent(build.id)}?fields=${fields}`)
+      return getTeamCityJson(`/app/rest/builds/id:${encodeURIComponent(build.id)}?fields=${fields}`, { operation: 'Read build snapshot dependencies', buildTypeId: build.buildTypeId, buildId: build.id })
     }))
     for (const build of details) {
       const dependencies = build['snapshot-dependencies']
@@ -422,7 +449,7 @@ async function getTeamCityActiveBuilds(configuration, branch, sources) {
   const buildTypeIds = sources?.length ? sources.map((source) => source.buildTypeId) : [configuration.buildTypeId]
   const results = await Promise.all(buildTypeIds.flatMap((buildTypeId) => ['running', 'queued'].map(async (state) => {
     const locator = encodeURIComponent(`buildType:(id:${buildTypeId}),branch:(name:${branch}),state:${state},personal:false,count:10`)
-    const data = await getTeamCityJson(`/app/rest/builds?locator=${locator}&fields=${fields}`)
+    const data = await getTeamCityJson(`/app/rest/builds?locator=${locator}&fields=${fields}`, { operation: `Read ${state} builds`, buildTypeId })
     return (data.build || []).map((build) => ({
       id: build.id,
       number: build.number,
@@ -481,6 +508,7 @@ async function getTeamCityComponentActivity(configuration, branch) {
       status: 'unknown',
       canTrigger: false,
       reason: error instanceof Error ? error.message : 'Unable to read TeamCity activity',
+      errorDetails: { ...(error?.teamCityDetails || { type: 'Activity error' }), branch, checkedAt: new Date().toISOString() },
     }
   }
 }

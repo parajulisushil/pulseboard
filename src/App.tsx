@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { apiRequest } from './api'
+import { clearErrors, getErrors, subscribeErrors } from './errorCenter'
 import { currentRefreshTime, refreshTimeLabel, refreshTimeTitle } from './refreshTime'
 import GitLabApprovalsPage from './GitLabApprovalsPage'
 import AdPasswords from './AdPasswords'
@@ -73,6 +74,7 @@ type Server = {
 type TeamCityBuild = { id?: number; number?: string; webUrl?: string; startDate?: string; buildTypeId?: string; state?: string; component?: string }
 type TeamCityPendingBuild = { buildTypeId: string; name: string; id: number; number?: string; webUrl?: string; includedBuildIds: number[] }
 type TeamCityPendingSource = { buildTypeId: string; name: string; pendingChanges: number; webUrl?: string }
+type TeamCityErrorDetails = { type: string; operation?: string; buildTypeId?: string; buildId?: number; branch: string; checkedAt: string; timeoutMs?: number; httpStatus?: number; code?: string }
 type TeamCityComponent = {
   key: 'console' | 'api' | 'web'
   label: string
@@ -88,6 +90,7 @@ type TeamCityComponent = {
   status: string
   canTrigger: boolean
   reason?: string
+  errorDetails?: TeamCityErrorDetails
 }
 type Integration = { provider: string; status: string; reason?: string; id?: number; ref?: string; webUrl?: string; branch?: string; pendingChanges?: number; builds?: TeamCityBuild[]; components?: TeamCityComponent[] }
 type CurrentRelease = { value?: string; defaultValue?: string; isOverride?: boolean; pipeline?: string; environment?: string; reason?: string }
@@ -102,9 +105,9 @@ type ApprovalSummary = { status: 'available' | 'partial' | 'unknown'; pendingCou
 type AdPasswordSummary = { status: 'available' | 'partial'; expiredCount: number; expiringCount: number; mustChangeCount: number }
 type ScheduledJobSummaryItem = { status: 'scheduled' | 'running' | 'completed'; nextRunAt: string | null; lastStatus: 'success' | 'failed' | null }
 type ScheduledJobSummary = { jobs: ScheduledJobSummaryItem[]; timeZone: string }
-type Section = 'overview' | 'servers' | 'delivery' | 'infrastructure' | 'approvals' | 'ad' | 'jobs' | 'environment'
+type Section = 'overview' | 'servers' | 'delivery' | 'infrastructure' | 'approvals' | 'ad' | 'jobs' | 'environment' | 'errors'
 
-const sectionPaths: Record<Section, string> = { overview: '/', servers: '/test-machines', delivery: '/delivery-systems', infrastructure: '/infrastructure-status', approvals: '/approvals', ad: '/ad-passwords', jobs: '/scheduled-jobs', environment: '/environment' }
+const sectionPaths: Record<Section, string> = { overview: '/', servers: '/test-machines', delivery: '/delivery-systems', infrastructure: '/infrastructure-status', approvals: '/approvals', ad: '/ad-passwords', jobs: '/scheduled-jobs', environment: '/environment', errors: '/errors' }
 function sectionFromPath(pathname: string): Section {
   const path = pathname.replace(/\/+$/, '') || '/'
   if (path === '/servers' || path === '/test-machines') return 'servers'
@@ -114,6 +117,7 @@ function sectionFromPath(pathname: string): Section {
   if (path === '/ad-passwords') return 'ad'
   if (path === '/scheduled-jobs') return 'jobs'
   if (path === '/environment') return 'environment'
+  if (path === '/errors') return 'errors'
   return 'overview'
 }
 
@@ -168,6 +172,7 @@ function App() {
   const [overviewLastRefresh, setOverviewLastRefresh] = useState('Not checked')
   const [overviewRefreshFailed, setOverviewRefreshFailed] = useState(false)
   const [notice, setNotice] = useState<Notice | null>(null)
+  const [errors, setErrors] = useState(getErrors)
   const [pendingActions, setPendingActions] = useState<string[]>([])
   const [refreshingServers, setRefreshingServers] = useState<string[]>([])
   const [integrations, setIntegrations] = useState<IntegrationResponse>({})
@@ -368,6 +373,8 @@ function App() {
       overviewRefreshInFlight.current = false
     }
   }, [refreshDelivery, refreshOverviewSummaries])
+
+  useEffect(() => subscribeErrors(() => setErrors(getErrors())), [])
 
   useEffect(() => {
     const initialRefresh = window.setTimeout(() => {
@@ -832,13 +839,14 @@ function App() {
           <button type="button" disabled={adResetPending} className={`nav-item ${activeSection === 'jobs' ? 'active' : ''}`} aria-label="Scheduled jobs" onClick={() => navigateTo('jobs')}><span>◷</span>Scheduled jobs</button>
           <button type="button" className={`nav-item ${activeSection === 'ad' ? 'active' : ''}`} aria-label="AD passwords" onClick={() => navigateTo('ad')}><span>⚿</span>AD passwords</button>
           <button type="button" disabled={adResetPending} className={`nav-item ${activeSection === 'environment' ? 'active' : ''}`} onClick={() => navigateTo('environment')}><span>⚙</span>Environment</button>
+          <button type="button" disabled={adResetPending} className={`nav-item ${activeSection === 'errors' ? 'active' : ''}`} onClick={() => navigateTo('errors')}><span>!</span>Errors <b>{errors.length}</b></button>
         </nav>
         <div className="sidebar-bottom"><div className="account-dot">OP</div><div><strong>Operations</strong><small>Protected workspace</small></div></div>
       </aside>
 
       <main className="main-content">
         <header className="topbar">
-          <div className="breadcrumb">Operations <span>/</span> <strong>{activeSection === 'environment' ? 'Environment' : activeSection === 'ad' ? 'AD passwords' : activeSection === 'jobs' ? 'Scheduled jobs' : activeSection === 'servers' ? 'Test machines' : activeSection === 'delivery' ? 'Delivery systems' : activeSection === 'infrastructure' ? 'Infrastructure status' : activeSection === 'approvals' ? 'Approvals' : 'Overview'}</strong></div>
+          <div className="breadcrumb">Operations <span>/</span> <strong>{activeSection === 'environment' ? 'Environment' : activeSection === 'ad' ? 'AD passwords' : activeSection === 'jobs' ? 'Scheduled jobs' : activeSection === 'servers' ? 'Test machines' : activeSection === 'delivery' ? 'Delivery systems' : activeSection === 'infrastructure' ? 'Infrastructure status' : activeSection === 'approvals' ? 'Approvals' : activeSection === 'errors' ? 'Errors' : 'Overview'}</strong></div>
           <div className="top-actions">
             <span className={`live-indicator ${apiHealthy ? '' : 'disconnected'}`}><i />{apiHealthy ? 'Live monitoring' : 'Connection unavailable'}</span>
             <div className="avatar" aria-hidden="true">OP</div>
@@ -846,6 +854,15 @@ function App() {
         </header>
 
         <div className="content-wrap">
+          {activeSection === 'errors' && <>
+            <section className="page-heading"><div><p className="eyebrow">Diagnostics</p><h1>Errors</h1><p className="subheading">Failures observed across Pulseboard in this browser session. Entries are cleared when the page reloads.</p></div><button type="button" className="refresh-button" disabled={!errors.length} onClick={clearErrors}>Clear errors</button></section>
+            <section className="error-center" aria-label="Recent errors">
+              {!errors.length ? <div className="loading-state">No errors recorded in this session.</div> : errors.map((entry) => <article className="error-entry" key={entry.id}>
+                <div className="error-entry-heading"><div><span>{entry.feature} · {entry.category}</span><h2>{entry.message}</h2></div><span className="error-count">{entry.count} {entry.count === 1 ? 'occurrence' : 'occurrences'}</span></div>
+                <dl><dt>Last seen</dt><dd><time dateTime={entry.lastSeen}>{new Date(entry.lastSeen).toLocaleString()}</time></dd>{entry.count > 1 && <><dt>First seen</dt><dd><time dateTime={entry.firstSeen}>{new Date(entry.firstSeen).toLocaleString()}</time></dd></>}{Object.entries(entry.details).map(([key, value]) => <div className="error-detail-row" key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
+              </article>)}
+            </section>
+          </>}
           {activeSection === 'ad' && <AdPasswords onResetPending={setAdResetPending} />}
           {activeSection === 'jobs' && <ScheduledJobs />}
           {activeSection === 'environment' && <EnvironmentSettings onDirtyChange={setEnvironmentDirty} onBusyChange={setEnvironmentBusy} />}

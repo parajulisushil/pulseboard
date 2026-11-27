@@ -79,6 +79,12 @@ test('reports unknown when snapshot data is unavailable', async (context) => {
   assert.equal(result.status, 'unknown')
   assert.equal(result.canTrigger, false)
   assert.match(result.reason, /TeamCity returned 503/)
+  assert.equal(result.errorDetails.type, 'HTTP error')
+  assert.equal(result.errorDetails.httpStatus, 503)
+  assert.equal(result.errorDetails.operation, 'Read build snapshot dependencies')
+  assert.equal(result.errorDetails.buildTypeId, 'Intermediate')
+  assert.equal(result.errorDetails.buildId, 50)
+  assert.equal(result.errorDetails.branch, branch)
 })
 
 test('rejects a latest dependency build from another branch', async (context) => {
@@ -111,4 +117,26 @@ test('allows a Console trigger when only a newer dependency build is pending', a
   const queued = calls.find((call) => call.payload)?.payload
   assert.equal(queued.branchName, branch)
   assert.equal(queued.buildType.id, 'Setup')
+})
+
+
+test('reports the timed-out TeamCity operation without exposing credentials', async (context) => {
+  const previous = { TEAMCITY_URL: process.env.TEAMCITY_URL, TEAMCITY_TOKEN: process.env.TEAMCITY_TOKEN }
+  process.env.TEAMCITY_URL = 'https://teamcity.example'
+  process.env.TEAMCITY_TOKEN = 'secret-token'
+  context.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } })
+  context.mock.method(globalThis, 'fetch', async (url) => {
+    if (new URL(String(url)).pathname === '/app/rest/changes') throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+    return new Response(JSON.stringify({ build: [] }), { headers: { 'Content-Type': 'application/json' } })
+  })
+  const result = await getTeamCityComponentActivity({ key: 'api', label: 'API', buildTypeId: 'ApiSetup' }, branch)
+  assert.equal(result.status, 'unknown')
+  assert.equal(result.reason, 'TeamCity request timed out after 10 seconds')
+  assert.equal(result.errorDetails.type, 'Timeout')
+  assert.equal(result.errorDetails.operation, 'Read pending changes')
+  assert.equal(result.errorDetails.buildTypeId, 'ApiSetup')
+  assert.equal(result.errorDetails.branch, branch)
+  assert.equal(result.errorDetails.timeoutMs, 10000)
+  assert.ok(!Number.isNaN(Date.parse(result.errorDetails.checkedAt)))
+  assert.doesNotMatch(JSON.stringify(result), /secret-token/)
 })
